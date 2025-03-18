@@ -1,0 +1,24 @@
+
+hidden layer backprop
+
+z = Wx + b
+a = f(z)
+delta = (W_next^T × delta_next) ⊙ f'(z)
+delta_W = delta × a_prev^T
+
+output layer backprop
+
+z = Wx + b
+a = softmax(z)
+delta = a - y  (directly from loss derivative)
+delta_W = delta × a_prev^T
+
+
+linear layer above a flatten that is above a convolutional layer
+call it's loss DL/dY (which doesn't make any sense but there you go...)
+
+produce the input to reshaping the flatten 
+dL/dX_flat = W^T · dL/dY
+
+then reshape dL/DX_flat to the image for the next lower convolutional layer
+dL/dX = reshape(dL/dX_flat, original_conv_output_shape)

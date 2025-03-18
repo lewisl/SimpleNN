@@ -1,0 +1,1 @@
+newfeedforward!(layers, rand(28, 28, 1, n_samples))
