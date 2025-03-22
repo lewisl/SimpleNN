@@ -27,7 +27,8 @@ export
     predict,
     display_mnist_digit,
     weights2file,
-    file2weights
+    file2weights,
+    show_all_array_sizes
 
 using Random
 using LinearAlgebra

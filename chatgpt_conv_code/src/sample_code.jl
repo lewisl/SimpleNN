@@ -50,6 +50,20 @@ function small_conv()
     return layerspecs
 end
 
+function test_conv()
+    input = LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
+    conv1 = LayerSpec(outch=32, f_h=3, f_w=3, kind=:conv, name=:conv1, activation=:relu, adj=0.002)
+    maxpool1 = LayerSpec(f_h=2, f_w=2, kind=:maxpool, name=:maxpool1)
+    flatten = LayerSpec(kind=:flatten, name=:flatten)
+    linear1 = LayerSpec(h=256, kind=:linear, activation=:relu, name=:linear1, adj=0.002)
+    output = LayerSpec(h=10, kind=:linear, activation=:softmax, name=:output)
+
+    layerspecs = LayerSpec[]
+    push!(layerspecs, input, conv1, flatten, linear1, output)
+
+    return layerspecs
+end
+
 function simple_specs()
     input = LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
     flatten = LayerSpec(h=28, w=28, outch=1, kind=:flatten, name=:flatten)
@@ -106,7 +120,6 @@ function preptrain(modelspecs::Function, batch_size, mini_batch_size)
     x_train = trainset.features[1:28, 1:28,1:batch_size]
     x_train = Float64.(x_train)
     x_train = reshape(x_train, 28, 28, 1, batch_size)
-    @show size(x_train)
 
     y_train = trainset.targets[1:batch_size]
     y_train = indicatormat(y_train)
@@ -118,9 +131,9 @@ function preptrain(modelspecs::Function, batch_size, mini_batch_size)
     y_train_shuf = y_train[:,img_idx]
 
     layerspecs = modelspecs()   # set_layer_specs()
-    display(layerspecs);println()
 
     layers = allocate_layers(layerspecs, mini_batch_size);
+    show_all_array_sizes(layers)
 
     return layerspecs, layers, x_train_shuf, y_train_shuf
 end
@@ -219,6 +232,67 @@ Base.@kwdef mutable struct MaxPoolLayer
     eps_l::Array{Float64, 4} = Float64[;;;;]
 end
 
+function show_array_sizes(layer::InputLayer)
+    @show layer.name
+    @show size(layer.a)
+    return
+end
+
+function show_array_sizes(layer::ConvLayer)
+    @show layer.name
+    @show size(layer.z)
+    @show size(layer.pad_z)
+    @show size(layer.a)
+    @show size(layer.a_below)
+    @show size(layer.eps_l)
+    @show size(layer.pad_next_eps)
+    @show size(layer.grad_a)
+    @show size(layer.grad_weight)
+    @show size(layer.grad_bias)
+    return
+end
+
+function show_array_sizes(layer::FlattenLayer)
+    @show layer.name
+    @show layer.output_dim
+    @show size(layer.a)
+    @show size(layer.eps_l)
+    return
+end
+
+function show_array_sizes(layer::MaxPoolLayer)
+    @show layer.name
+    @show layer.pool_size
+    @show input_shape
+    @show size(layer.z)
+    @show size(layer.eps_l)
+    return
+end
+
+function show_array_sizes(layer::LinearLayer)
+    @show layer.name
+    @show size(layer.weight)
+    @show layer.output_dim
+    @show layer.input_dim
+    @show size(layer.bias)
+    @show size(layer.z)
+    @show size(layer.a)
+    @show size(layer.a_below)
+    @show size(layer.eps_l)
+    @show size(layer.grad_a)
+    @show size(layer.grad_weight)
+    @show size(layer.grad_bias)
+    return
+end
+
+function show_all_array_sizes(layers)
+    for lr in layers
+        println()
+        show_array_sizes(lr)
+        println()
+    end
+    return
+end
 
 function he_initialize(weight_dims::NTuple{4, Int64}; scale=2.0, adj=0.0)
     k_h, k_w, in_channels, out_channels = weight_dims
@@ -243,6 +317,10 @@ function allocate_layers(lsvec::Vector{LayerSpec}, n_samples)
 
     Random.seed!(42)
     layerdat = []
+    prev_h = 0
+    prev_w = 0
+    prev_ch = 0
+    # n_samples
 
     for (idx,lr)  in enumerate(lsvec)
         if idx == 1
@@ -258,6 +336,9 @@ function allocate_layers(lsvec::Vector{LayerSpec}, n_samples)
                         out_c = lr.outch,
                         a = zeros(lr.h, lr.w, lr.outch, n_samples),
                         ))
+            prev_h = lr.h    # must use layerspec for input layer
+            prev_w = lr.w
+            prev_ch = lr.outch
             end
             continue  # skip the ifs and go to next lr
         elseif lr.kind == :conv
@@ -265,15 +346,16 @@ function allocate_layers(lsvec::Vector{LayerSpec}, n_samples)
             # filter dims
             f_h = lr.f_h
             f_w = lr.f_w
-            inch = lr.inch
+            inch = prev_ch
             outch = lr.outch
-            # output image dims
-            out_h=lr.h
-            out_w=lr.w
-            # backprop dimensions
-            b_out_h = lsvec[idx-1].h   
-            b_out_w = lsvec[idx-1].w   
-            b_out_c = lsvec[idx-1].outch   
+            pad = ifelse(lr.pad == :same, 1, 0)
+            # output image dims: calculated
+            out_h = div((prev_h + 2pad - f_h), lr.stride) + 1
+            out_w = div((prev_w + 2pad - f_w), lr.stride) + 1
+            # backprop dimensions   TODO this needs to be tested
+            b_out_h = prev_h   # lsvec[idx-1].h   
+            b_out_w = prev_w   # lsvec[idx-1].w   
+            b_out_c = prev_ch  # lsvec[idx-1].outch   
             # @show lr.adj
             push!(layerdat,
                 ConvLayer(  
@@ -288,9 +370,9 @@ function allocate_layers(lsvec::Vector{LayerSpec}, n_samples)
                     weight=he_initialize((f_h,f_w,inch,outch),scale=2.0, adj=lr.adj),
                     f_h=f_h,
                     f_w=f_w,
-                    inch=inch,
+                    inch=prev_ch,
                     outch=outch,
-                    pad=lr.pad,
+                    pad=lr.pad,   # this is Symbol for kind of padding either :same or :none
                     stride=lr.stride,
                     bias=zeros(outch),
                     z=zeros(out_h, out_w, outch, n_samples),
@@ -306,11 +388,15 @@ function allocate_layers(lsvec::Vector{LayerSpec}, n_samples)
                     grad_bias=zeros(outch),
                     b=n_samples  # not clear we need this!
                     ))   
+            prev_h = out_h
+            prev_w = out_w
+            prev_ch = outch
 
         elseif lr.kind == :linear
             # weight dims
             outputs=lr.h
-            inputs = layerdat[idx-1].output_dim
+            # inputs = layerdat[idx-1].output_dim
+            inputs = prev_h
             # output dims
             # @show lr.adj
             push!(layerdat,
@@ -336,13 +422,13 @@ function allocate_layers(lsvec::Vector{LayerSpec}, n_samples)
                     grad_weight = zeros(outputs, inputs),
                     grad_bias = zeros(outputs),
                     ))
-
+            prev_h = outputs
         elseif lr.kind == :maxpool
-            in_h = layerdat[idx-1].out_h
-            in_w = layerdat[idx-1].out_w
-            out_h = div(layerdat[idx-1].out_h, lr.f_h)
-            out_w = div(layerdat[idx-1].out_w,lr.f_w) 
-            outch = layerdat[idx-1].outch
+            in_h = prev_h  # layerdat[idx-1].out_h
+            in_w = prev_w  # layerdat[idx-1].out_w
+            out_h = div(layerdat[idx-1].out_h, lr.f_h) # assume stride = lr.f_h implicit in code
+            out_w = div(layerdat[idx-1].out_w,lr.f_w)  # ditto
+            outch = prev_ch # layerdat[idx-1].outch
             batch_size=layerdat[idx-1].b
             push!(layerdat,
                 MaxPoolLayer(
@@ -352,11 +438,13 @@ function allocate_layers(lsvec::Vector{LayerSpec}, n_samples)
                     mask = falses(out_h, out_w, outch, batch_size),
                     eps_l = zeros(in_h, in_w, outch, batch_size)
                     ))
-
+            prev_h = out_h
+            prev_w = out_w
+            prev_ch = outch
         elseif lr.kind == :flatten
-            h = lsvec[idx-1].h
-            w = lsvec[idx-1].w
-            ch = lsvec[idx-1].outch
+            h = prev_h      # lsvec[idx-1].h
+            w = prev_w      # lsvec[idx-1].w
+            ch = prev_ch    # lsvec[idx-1].outch
             output_dim = h*w*ch
             b = n_samples
             push!(layerdat,
@@ -371,6 +459,8 @@ function allocate_layers(lsvec::Vector{LayerSpec}, n_samples)
                     dl_dflat = zeros(output_dim, n_samples),
                     eps_l=zeros(h,w,ch,n_samples)
                     ))
+            prev_h = output_dim
+            # not setting prev_w and prev_ch as next feedforward layer following :flatten must be linear
         else
             error("Found unrecognized layer kind")
         end
