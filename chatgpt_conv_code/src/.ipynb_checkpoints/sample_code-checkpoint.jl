@@ -1,3 +1,12 @@
+#=
+TODO
+- calculate size of successive conv layers and linear layers
+- add stride to loops and array size calculations
+
+=#
+
+
+
 using Random
 using LinearAlgebra
 using Colors, Plots
