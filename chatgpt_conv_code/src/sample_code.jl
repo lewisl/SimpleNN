@@ -36,30 +36,20 @@ function conv_specs()
     return layerspecs
 end
 
+
 function small_conv()
     input = LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
-    conv1 = LayerSpec(h=26, w=26, outch=32, f_h=3, f_w=3, inch=1, kind=:conv, name=:conv1, activation=:relu, adj=0.002)
-    maxpool1 = LayerSpec(h=13, w=13, outch=32, f_h=2, f_w=2, kind=:maxpool, name=:maxpool1)
-    flatten = LayerSpec(h=13, w=13, outch=32, kind=:flatten, name=:flatten)
-    linear1 = LayerSpec(h=256, kind=:linear, activation=:relu, name=:linear1, adj=0.002)
-    output = LayerSpec(h=10, kind=:linear, activation=:softmax, name=:output)
-
-    layerspecs = LayerSpec[]
-    push!(layerspecs, input, conv1, flatten, linear1, output)
-
-    return layerspecs
-end
-
-function test_conv()
-    input = LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
-    conv1 = LayerSpec(outch=32, f_h=3, f_w=3, kind=:conv, name=:conv1, activation=:relu, adj=0.002)
+    conv1 = LayerSpec(outch=24, f_h=3, f_w=3, kind=:conv, name=:conv1, activation=:relu, adj=0.0)
     maxpool1 = LayerSpec(f_h=2, f_w=2, kind=:maxpool, name=:maxpool1)
+    conv2 = LayerSpec(outch=48, f_h=3, f_w=3, kind=:conv, name=:conv2, activation=:relu, adj=0.0)
+    maxpool2 = LayerSpec(f_h=2, f_w=2, kind=:maxpool, name=:maxpool2)
     flatten = LayerSpec(kind=:flatten, name=:flatten)
-    linear1 = LayerSpec(h=256, kind=:linear, activation=:relu, name=:linear1, adj=0.002)
+    linear1 = LayerSpec(h=128, kind=:linear, activation=:relu, name=:linear1, adj=0.0)
+    linear2 = LayerSpec(h=64, kind=:linear, activation=:relu, name=:linear2, adj=0.0)
     output = LayerSpec(h=10, kind=:linear, activation=:softmax, name=:output)
 
     layerspecs = LayerSpec[]
-    push!(layerspecs, input, conv1, flatten, linear1, output)
+    push!(layerspecs, input, conv1, maxpool1, conv2, maxpool2, flatten, linear1, linear2, output)
 
     return layerspecs
 end
@@ -225,10 +215,12 @@ Base.@kwdef mutable struct MaxPoolLayer
     name::Symbol = :noname
     pool_size::Tuple{Int,Int}
     stride::Int64=1  # TODO not using this yet
-    mask::Array{Bool,4}
-    input_shape::Tuple{Int,Int,Int, Int}
+    in_h::Int64=0
+    in_w::Int64=0
+    # input_shape::Tuple{Int,Int,Int, Int}
     # should we have output_shape?
-    z::Array{Float64, 4} = Float64[;;;;]
+    a::Array{Float64, 4} = Float64[;;;;]
+    mask::Array{Bool,4} = Bool[;;;;]
     eps_l::Array{Float64, 4} = Float64[;;;;]
 end
 
@@ -263,8 +255,9 @@ end
 function show_array_sizes(layer::MaxPoolLayer)
     @show layer.name
     @show layer.pool_size
-    @show input_shape
-    @show size(layer.z)
+    # @show input_shape
+    @show size(layer.a)
+    @show size(layer.mask)
     @show size(layer.eps_l)
     return
 end
@@ -367,7 +360,7 @@ function allocate_layers(lsvec::Vector{LayerSpec}, n_samples)
                                     else error("Only :relu, and :none  supported, not $(Symbol(lr.activation)).")
                                     end,
                     adj = lr.adj,
-                    weight=he_initialize((f_h,f_w,inch,outch),scale=2.0, adj=lr.adj),
+                    weight=he_initialize((f_h,f_w,inch,outch),scale=2.2, adj=lr.adj),
                     f_h=f_h,
                     f_w=f_w,
                     inch=prev_ch,
@@ -411,7 +404,7 @@ function allocate_layers(lsvec::Vector{LayerSpec}, n_samples)
                                     else error("Only :relu, :softmax and :none  supported, not $(Symbol(lr.activation)).")
                                     end,
                     adj = lr.adj,
-                    weight = he_initialize((outputs, inputs), scale=1.0, adj=lr.adj),
+                    weight = he_initialize((outputs, inputs), scale=1.5, adj=lr.adj),
                     output_dim =  outputs,
                     input_dim =   inputs,
                     bias = zeros(outputs),
@@ -434,9 +427,11 @@ function allocate_layers(lsvec::Vector{LayerSpec}, n_samples)
                 MaxPoolLayer(
                     name = lr.name,
                     pool_size = (lr.f_h, lr.f_w),
-                    z = zeros(out_h, out_w, outch, batch_size),
-                    mask = falses(out_h, out_w, outch, batch_size),
-                    eps_l = zeros(in_h, in_w, outch, batch_size)
+                    a = zeros(out_h, out_w, outch, batch_size),
+                    mask = falses(in_h, in_w, outch, batch_size),
+                    eps_l = zeros(in_h, in_w, outch, batch_size),
+                    in_h = in_h,
+                    in_w = in_w
                     ))
             prev_h = out_h
             prev_w = out_w
@@ -513,8 +508,8 @@ function layer_forward!(layer::ConvLayer, x::AbstractArray{Float64,4}, batch_siz
 
     @inbounds for b in 1:batch_size
         for oc = 1:out_channels
-            for i = 1:H_out
-                for j = 1:W_out
+            for j = 1:W_out
+                for i = 1:H_out
                     for ic = 1:in_channels
                         for fh in 1:f_h
                             for fw in 1:f_w
@@ -579,8 +574,8 @@ function layer_backward!(layer::ConvLayer, layer_next, n_samples)
             for i = 1:H_out-(f_h-1) # prevent filter from extending out of bounds
                 for j = 1:W_out-(f_w-1)
                     for ic = 1:inch
-                        for fi = 1:f_h
-                            for fj = 1:f_w
+                        for fj = 1:f_w
+                            for fi = 1:f_h
                                 # Flipped weight indices for backward pass: use weight[f_h-fi+1,f_w-fj+1] instead of weight[fi,fj]
                                 layer.eps_l[i+fi-1,j+fj-1,ic,b] += layer.weight[f_h-fi+1,f_w-fj+1,ic,oc] * layer.pad_next_eps[i,j,oc,b] 
                             end
@@ -624,8 +619,8 @@ function compute_grad_weight!(layer, n_samples)
             # View of the input activation for this channel
             # (We'll slide this view for each filter offset)
             input_chan = @view layer.a_below[:, :, ic, :]   # size H_in × W_in × batch_size
-            for fi in 1:f_h
-                for fj in 1:f_w
+            for fj in 1:f_w
+                for fi in 1:f_h
                     # Extract the overlapping region of input corresponding to eps_l[:, :, oc, :]
                     local_patch = @view input_chan[fi:fi+H_out-1, fj:fj+W_out-1, :]
                     # Accumulate gradient for weight at (fi,fj, ic, oc)
@@ -641,23 +636,24 @@ function compute_grad_weight!(layer, n_samples)
 end
 
 # note: this implicitly assumes stride is the size of the patch
-function layer_forward!(layer::MaxPoolLayer, x::Array{Float64,4})
-    layer.input_shape = size(x)
+    # tested: it works
+function layer_forward!(layer::MaxPoolLayer, x::Array{Float64,4}, n_samples)
+    # layer.input_shape = size(x)
     (pool_h, pool_w) = layer.pool_size
-    (H, W, C, B) = layer.input_shape
-    H_out = div(H, pool_h)
-    W_out = div(W, pool_w)
+    (_, _, C, B) = size(layer.a)
+    H_out = div(layer.in_h, pool_h)
+    W_out = div(layer.in_w, pool_w)
     # re-initialize
-    fill!(layer.z, 0.0)   
+    fill!(layer.a, 0.0)   
     fill!(layer.mask, false)
 
-    for bn = 1:B
+    @inbounds for bn = 1:B
         for c = 1:C
-            for i = 1:H_out
-                for j = 1:W_out
+            for j = 1:W_out
+                for i = 1:H_out
                     region = view(x, (pool_h*(i-1)+1):(pool_h*i), (pool_w*(j-1)+1):(pool_w*j), c, bn)
                     max_val = maximum(region)
-                    z[i,j,c, bn] = max_val
+                    layer.a[i,j,c,bn] = max_val
                     for a = 1:pool_h, b = 1:pool_w
                         if region[a,b] == max_val && !layer.mask[pool_h*(i-1)+a, pool_w*(j-1)+b, c, bn]
                             layer.mask[pool_h*(i-1)+a, pool_w*(j-1)+b, c, bn] = true
@@ -671,18 +667,21 @@ function layer_forward!(layer::MaxPoolLayer, x::Array{Float64,4})
     return  # nothing
 end
 
-function layer_backward!(layer::MaxPoolLayer, d_out::Array{Float64,4})
-    (H, W, C, B) = layer.input_shape
+# tested:  appears to work
+function layer_backward!(layer::MaxPoolLayer, layer_next, n_samples)
+    # (H, W, C, B) = layer.input_shape
     # do we need to initialize layer.eps_l?
+    fill!(layer.eps_l, 0.0)
     (pool_h, pool_w) = layer.pool_size
-    (H_out, W_out, C_out, B) = size(layer.dflat)
-    for bn = 1:B
-        for c = 1:C
-            for i = 1:H_out
-                for j = 1:W_out
-                    for a = 1:pool_h, b = 1:pool_w
+    (H_in, W_in, C_in, B) = size(layer_next.eps_l)
+    @inbounds for bn = 1:B
+        for c = 1:C_in
+            for j = 1:W_in
+                for i = 1:H_in
+                    for b = 1:pool_w, a = 1:pool_h   # gives 2 rows and 2 columns for each i, j
                         if layer.mask[pool_h*(i-1)+a, pool_w*(j-1)+b, c, bn]
-                            layer.eps_l[pool_h*(i-1)+a, pool_w*(j-1)+b, c, bn] = d_out[i,j,c, bn]
+                            layer.eps_l[pool_h*(i-1)+a, pool_w*(j-1)+b, c, bn] = layer_next.eps_l[i,j,c, bn]
+                            break
                         end
                     end
                 end
@@ -693,7 +692,6 @@ function layer_backward!(layer::MaxPoolLayer, d_out::Array{Float64,4})
 end
 
 
-# TODO fix this with pre-allocated storage
 function layer_forward!(layer::FlattenLayer, x::Array{Float64, 4}, batch_size) 
     layer.a .= reshape(x,:,layer.b)
     return     # nothing
@@ -752,7 +750,7 @@ end
 
 function relu_grad!(grad, z, adj)   # I suppose this is really leaky_relu...
     @inbounds for i = eachindex(z)  # when passed any array, this will update in place
-        grad = ifelse(z[i] > 0.0, 1.0, adj)  # prevent vanishing gradients by not using 0.0
+        grad[i] = ifelse(z[i] > 0.0, 1.0, adj)  # prevent vanishing gradients by not using 0.0
     end
 end
 
