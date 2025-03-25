@@ -1,0 +1,13 @@
+*.jld2
+*.jld
+nnstats*.*
+*.mat
+*.pdf
+*.csv
+.vscode
+.idea
+ouput
+.stversions
+.stfolder
+.Rhistory
+*checkpoints

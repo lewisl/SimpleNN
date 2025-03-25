@@ -39,7 +39,7 @@ end
 
 function small_conv()
     input = LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
-    conv1 = LayerSpec(outch=24, f_h=3, f_w=3, kind=:conv, name=:conv1, activation=:relu, adj=0.0)
+    conv1 = LayerSpec(outch=32, f_h=3, f_w=3, kind=:conv, name=:conv1, activation=:relu, adj=0.0)
     maxpool1 = LayerSpec(f_h=2, f_w=2, kind=:maxpool, name=:maxpool1)
     conv2 = LayerSpec(outch=48, f_h=3, f_w=3, kind=:conv, name=:conv2, activation=:relu, adj=0.0)
     maxpool2 = LayerSpec(f_h=2, f_w=2, kind=:maxpool, name=:maxpool2)
@@ -49,7 +49,7 @@ function small_conv()
     output = LayerSpec(h=10, kind=:linear, activation=:softmax, name=:output)
 
     layerspecs = LayerSpec[]
-    push!(layerspecs, input, conv1, maxpool1, conv2, maxpool2, flatten, linear1, linear2, output)
+    push!(layerspecs, input, conv1, maxpool1, flatten, linear1, output)
 
     return layerspecs
 end
@@ -214,7 +214,6 @@ end
 Base.@kwdef mutable struct MaxPoolLayer
     name::Symbol = :noname
     pool_size::Tuple{Int,Int}
-    stride::Int64=1  # TODO not using this yet
     in_h::Int64=0
     in_w::Int64=0
     # input_shape::Tuple{Int,Int,Int, Int}
@@ -223,6 +222,16 @@ Base.@kwdef mutable struct MaxPoolLayer
     mask::Array{Bool,4} = Bool[;;;;]
     eps_l::Array{Float64, 4} = Float64[;;;;]
 end
+
+
+Base.@kwdef mutable struct stat_series
+    acc::Array{Float64, 1} = Float64[]
+    loss::Array{Float64, 1} = Float[]
+    batch_size::Int = 0
+    epochs::Int = 0
+    minibatch_size = 0
+end
+
 
 function show_array_sizes(layer::InputLayer)
     @show layer.name
@@ -464,6 +473,16 @@ function allocate_layers(lsvec::Vector{LayerSpec}, n_samples)
     return layerdat
 end
 
+function allocate_stats(batch_size, minibatch_size, epochs)
+    no_of_batches = div(batch_size, minibatch_size)
+    stats = stat_series(
+            acc = zeros(no_of_batches * epochs),
+            loss = zeros(no_of_batches * epochs),
+            batch_size=batch_size,  
+            epochs=epochs,
+            minibatch_size=minibatch_size)
+end
+
 
 # ============================
 # Setup prediction
@@ -647,6 +666,7 @@ function layer_forward!(layer::MaxPoolLayer, x::Array{Float64,4}, n_samples)
     fill!(layer.a, 0.0)   
     fill!(layer.mask, false)
 
+    # no stride: the pool window moves across the image edge to edge with no overlapping
     @inbounds for bn = 1:B
         for c = 1:C
             for j = 1:W_out
@@ -821,7 +841,6 @@ function backprop!(layers, y_train, n_samples)
     # skip over output layer (end) and input layer (begin)
     @inbounds for (j, lr) in enumerate(reverse(layers[begin+1:end-1])); 
         i = length(layers) - j; 
-        # @show i, typeof(lr)
         layer_backward!(lr, layers[i+1], n_samples)
     end
     return
@@ -861,8 +880,13 @@ function train_loop!(layers; x_train, y_train, batch_size, epochs, minibatch_siz
     @show mini_num
     @show n_samples
 
+    stats = allocate_stats(batch_size, minibatch_size, epochs)
+    counter = 0
+    new_epoch = false
+
     for e = 1:epochs
         @inbounds for batno in 1:mini_num
+
             if mini_num > 1
                 start_obs = (batno - 1) * minibatch_size + 1
                 end_obs = start_obs + minibatch_size - 1
@@ -875,20 +899,35 @@ function train_loop!(layers; x_train, y_train, batch_size, epochs, minibatch_siz
 
             # @show size(x_train_part)
             # @show size(y_train_part)
+            counter += 1
 
+            @show counter
             feedforward!(layers, x_train_part, n_samples)
 
             backprop!(layers, y_train_part, n_samples)
 
             update_weight_loop!(layers, lr)
 
-            loss_val = cross_entropy_loss(layers[end].a, y_train_part, n_samples)
-            acc = accuracy(layers[end].a, y_train_part)
-            println("\nepoch $e batch $batno Loss = $loss_val Accuracy = $acc\n")
+            gather_stats!(stats, layers, y_train_part, counter, batno, e; to_console=false)
+
         end
     end
+    return stats
 end
 
+
+function gather_stats!(stat_series, layers,  y_train, counter, batno, epoch; to_console=true, to_series=true)
+    loss_val = cross_entropy_loss(layers[end].a, y_train, stat_series.minibatch_size)
+    acc = accuracy(layers[end].a, y_train)
+    if to_series
+        stat_series.loss[counter] = loss_val
+        stat_series.acc[counter] = acc
+    end
+
+    if to_console
+        println("\nepoch $epoch batch $batno Loss = $loss_val Accuracy = $acc\n")
+    end
+end
 
 function predict(predlayers, x_input, y_input)
     n_samples = size(x_input, ndims(x_input))
@@ -925,6 +964,11 @@ function random_onehot(i,j)
         arr[rowselector, n] = 1.0
     end
     return arr
+end
+
+function plot_training(stats)
+    plot(stats.acc, label="Accuracy", color=:blue, ylabel="Accuracy")  
+    plot!(twinx(), stats.loss, label="Cost", ylabel="Loss",color=:red)
 end
 
 # ============================
