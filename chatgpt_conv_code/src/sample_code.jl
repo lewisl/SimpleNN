@@ -533,7 +533,7 @@ function layer_forward!(layer::ConvLayer, x::AbstractArray{Float64,4}, batch_siz
                         for fh in 1:f_h
                             for fw in 1:f_w
                                 layer.z[i,j,oc, b] = (x[i+fh-1, j+fw-1, ic, b] 
-                                    .* layer.weight[fh,fw,ic,oc] + layer.bias[oc])
+                                    * layer.weight[fh,fw,ic,oc] + layer.bias[oc])
                             end
                         end
                     end
@@ -719,17 +719,19 @@ end
 
 
 function layer_backward!(layer::FlattenLayer, layer_next::LinearLayer, batch_size)
-    # @show size(layer.dl_dflat)
-    # @show size(layer_next.weight')
-    # @show size(layer_next.eps_l)
-    layer.dl_dflat = layer_next.weight' * layer_next.eps_l  # TODO element-wise times current layer's relu'
-    layer.eps_l .= reshape(layer.dl_dflat,layer.h, layer.w, layer.ch, :)
+    # Use pre-allocated dl_dflat array for matrix multiplication
+    mul!(layer.dl_dflat, layer_next.weight', layer_next.eps_l)  # in-place matrix multiplication
+    # Reshape in-place using views
+    @inbounds for i in 1:batch_size
+        layer.eps_l[:,:,:,i] .= reshape(@view(layer.dl_dflat[:,i]), layer.h, layer.w, layer.ch)
+    end
     return     # nothing
 end
 
 
 function layer_forward!(layer::LinearLayer, x::Matrix{Float64}, batch_size)
-    layer.z .= layer.weight * x .+ layer.bias  # TODO test this for allocations
+    mul!(layer.z, layer.weight, x)  # in-place matrix multiplication
+    layer.z .+= layer.bias  # in-place addition with broadcasting
     layer.a_below = x   # assign alias for using in backprop
     # activation
     layer.activationf(layer, layer.adj)
@@ -739,16 +741,23 @@ end
 function layer_backward!(layer::LinearLayer, layer_next::LinearLayer, n_samples; output=false)
     if output
         # layer.eps_l calculated by prior call to dloss_dz
-        layer.grad_weight .= (layer.eps_l * layer.a_below') .* (1.0 / n_samples)  # this x is activation of lower layer
+        mul!(layer.grad_weight, layer.eps_l, layer.a_below')  # in-place matrix multiplication
+        layer.grad_weight .*= (1.0 / n_samples)  # in-place scaling
     else  # this is hidden layer
         relu_grad!(layer.grad_a, layer.z, layer.adj)  # calculates layer.grad_a
-        layer.eps_l .= (layer_next.weight' * layer_next.eps_l) .* layer.grad_a   
-        layer.grad_weight .= (layer.eps_l * layer.a_below') .* (1.0 / n_samples)  # this x is activation of lower layer
+        mul!(layer.eps_l, layer_next.weight', layer_next.eps_l)  # in-place matrix multiplication
+        layer.eps_l .*= layer.grad_a  # in-place element-wise multiplication
+        mul!(layer.grad_weight, layer.eps_l, layer.a_below')  # in-place matrix multiplication
+        layer.grad_weight .*= (1.0 / n_samples)  # in-place scaling
     end
-    layer.grad_bias .= sum(layer.eps_l, dims=2) .* (1.0 / n_samples)  # sum(epsilon, dims=2) .* (1.0 / n)
-    # @show size(layer.eps_l)
-    # @show size(layer.bias)
-    # @show size(layer.grad_weight)
+    # Compute bias gradient efficiently without allocations
+    fill!(layer.grad_bias, 0.0)  # Reset to zero
+    for j in axes(layer.eps_l, 2)  # Iterate over columns (batch dimension)
+        for i in axes(layer.eps_l, 1)  # Iterate over rows (output dimension)
+            layer.grad_bias[i] += layer.eps_l[i,j]
+        end
+    end
+    layer.grad_bias .*= (1.0 / n_samples)  # in-place scaling
     return     # nothing
 end
 
