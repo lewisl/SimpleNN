@@ -1,8 +1,9 @@
 #=
 TODO
-- calculate size of successive conv layers and linear layers
-- add stride to loops and array size calculations
-
+- test ConvLayer with no padding
+- why don't we do implicit flatten when conv precedes linear?
+- fix input and output dims for structs, layer_back and layer_forward
+- use size() to capture needed dimensions and eliminate some fields from the layer structs
 =#
 
 
@@ -13,6 +14,41 @@ using Colors, Plots
 using Serialization
 using MLDatasets
 using StatsBase
+
+
+
+
+# ============================
+# Setup training
+# ============================
+
+@Base.kwdef struct LayerSpec
+    name::Symbol=:noname
+    kind::Symbol=:none
+    activation::Symbol=:none
+    adj::Float64=0  # leaky_relu factor. also for he_initialize
+    h::Int64=0
+    w::Int64=0
+    outch::Int64=0
+    f_h::Int64=0
+    f_w::Int64=0
+    inch::Int64=0
+    padrule::Symbol=:same        # no input required to accept default
+    stride::Int64=1          # no input required to accept default
+end
+
+# LayerSpec methods for specific kinds of layers
+"""
+    convlayerspec(;name::Symbol, activation::Symbol, adj::Float64=0.002, h::Int64=0, w::Int64=0, outch::Int64=0, f_h::Int64, f_w::Int64, inch::Int64=0, padrule::Symbol=:same)
+
+Only inputs needed for a convlayer are passed to the LayerSpec. 
+Note that h, w, and inch will be calculated from the previous layer,
+which should be an image input, another conv layer, or a maxpooling layer.
+You must provide inputs for name, activation, outch, f_h, and f_w.
+"""
+function convlayerspec(;name::Symbol, activation::Symbol=:relu, adj::Float64=0.002, h::Int64=0, w::Int64=0, outch::Int64, f_h::Int64, f_w::Int64, inch::Int64=0, padrule::Symbol=:same)
+    LayerSpec(name=name, kind=:conv, activation=activation, adj=adj, h=h, w=w, outch=outch,f_h=f_h, f_w=f_w, inch=inch, padrule=padrule )
+end
 
 
 # ============================
@@ -37,22 +73,27 @@ function conv_specs()
 end
 
 
-function small_conv()
-    input = LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
-    conv1 = LayerSpec(outch=32, f_h=3, f_w=3, kind=:conv, name=:conv1, activation=:relu, adj=0.0)
-    maxpool1 = LayerSpec(f_h=2, f_w=2, kind=:maxpool, name=:maxpool1)
-    conv2 = LayerSpec(outch=48, f_h=3, f_w=3, kind=:conv, name=:conv2, activation=:relu, adj=0.0)
-    maxpool2 = LayerSpec(f_h=2, f_w=2, kind=:maxpool, name=:maxpool2)
-    flatten = LayerSpec(kind=:flatten, name=:flatten)
-    linear1 = LayerSpec(h=128, kind=:linear, activation=:relu, name=:linear1, adj=0.0)
-    linear2 = LayerSpec(h=64, kind=:linear, activation=:relu, name=:linear2, adj=0.0)
-    output = LayerSpec(h=10, kind=:linear, activation=:softmax, name=:output)
+small_conv = LayerSpec[
+        LayerSpec(name=:input, h=28, w=28, outch=1, kind=:input, )
+        convlayerspec(name=:conv1, outch=32, f_h=3, f_w=3, activation=:relu, adj=0.0)
+        LayerSpec(f_h=2, f_w=2, kind=:maxpool, name=:maxpool1)
+        convlayerspec(name=:conv2, outch=48, f_h=3, f_w=3, activation=:relu, adj=0.0)
+        LayerSpec(name=:maxpool2, f_h=2, f_w=2, kind=:maxpool, )
+        LayerSpec(name=:flatten, kind=:flatten)
+        LayerSpec(name=:linear1, h=128, kind=:linear, activation=:relu, adj=0.0)
+        LayerSpec(name=:linear2, h=64, kind=:linear, activation=:relu, adj=0.0)
+        LayerSpec(name=:output, h=10, kind=:linear, activation=:softmax, )
+        ]
 
-    layerspecs = LayerSpec[]
-    push!(layerspecs, input, conv1, maxpool1, flatten, linear1, output)
-
-    return layerspecs
-end
+little_conv = LayerSpec[
+        LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input),
+        convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, adj=0.0),
+        LayerSpec(f_h=2, f_w=2, kind=:maxpool, name=:maxpool2),
+        LayerSpec(kind=:flatten, name=:flatten),
+        LayerSpec(h=128, kind=:linear, activation=:relu, name=:linear1, adj=0.0),
+        LayerSpec(h=64, kind=:linear, activation=:relu, name=:linear2, adj=0.0),
+        LayerSpec(h=10, kind=:linear, activation=:softmax, name=:output)
+        ]
 
 function simple_specs()
     input = LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
@@ -81,27 +122,14 @@ function deep_specs()
 end
 
 
-# ============================
-# Setup training
-# ============================
-
-@Base.kwdef struct LayerSpec
-    name::Symbol=:noname
-    kind::Symbol=:none
-    activation::Symbol=:none
-    adj::Float64=0  # leaky_relu factor. also for he_initialize
-    h::Int64=0
-    w::Int64=0
-    outch::Int64=0
-    f_h::Int64=0
-    f_w::Int64=0
-    inch::Int64=0
-    pad::Symbol=:same        # no input required to accept default
-    stride::Int64=1          # no input required to accept default
+# method to pass a function
+function preptrain(modelspecs::Function, batch_size, minibatch_size)
+    layerspecs = modelspecs() 
+    preptrain(layerspecs, batch_size, minibatch_size)
 end
 
-
-function preptrain(modelspecs::Function, batch_size, mini_batch_size)
+# method to pass a vector
+function preptrain(layerspecs::Vector{LayerSpec}, batch_size, minibatch_size)
     trainset = MNIST(:train)
     testset = MNIST(:test)
 
@@ -120,9 +148,7 @@ function preptrain(modelspecs::Function, batch_size, mini_batch_size)
     x_train_shuf = x_train[:,:,:,img_idx]
     y_train_shuf = y_train[:,img_idx]
 
-    layerspecs = modelspecs()   # set_layer_specs()
-
-    layers = allocate_layers(layerspecs, mini_batch_size);
+    layers = allocate_layers(layerspecs, minibatch_size);
     show_all_array_sizes(layers)
 
     return layerspecs, layers, x_train_shuf, y_train_shuf
@@ -143,18 +169,18 @@ Base.@kwdef mutable struct ConvLayer
     f_w::Int64 = 0
     inch::Int64 = 0
     outch::Int64 = 0
-    pad::Symbol = :same   # other option is :none
+    padrule::Symbol = :same   # other option is :none
     stride::Int64 = 1     # assume stride is symmetrical for now
     bias::Vector{Float64} = Float64[]    # (out_channels)
     z::Array{Float64,4} = Float64[;;;;]
-    pad_z::Array{Float64, 4} = Float64[;;;;]
+    pad_x::Array{Float64, 4} = Float64[;;;;]
     a::Array{Float64,4} = Float64[;;;;]
     a_below::Array{Float64, 4} = Float64[;;;;]  
     # image dims
-    out_h::Int64 = 0
-    out_w::Int64 = 0
-    in_h::Int64 = 0
-    in_w::Int64 = 0
+    out_h::Int64 = 0  # we can set this during allocation and not recalc in training loop
+    out_w::Int64 = 0  # ditto
+    in_h::Int64 = 0   # ditto 
+    in_w::Int64 = 0   # ditto
     eps_l::Array{Float64,4} = Float64[;;;;]
     pad_next_eps::Array{Float64,4} = Float64[;;;;]  # TODO need to test if this is needed given successive conv layer sizes
     grad_a::Array{Float64,4} = Float64[;;;;]
@@ -162,6 +188,57 @@ Base.@kwdef mutable struct ConvLayer
     grad_bias::Vector{Float64} = Float64[]
 
     b::Int64 = 0  
+end
+
+# method to do prep calculations based on LayerSpec inputs, then create a LinearLayer
+function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
+    # TODO inclde logic to set sizes of output matrices and padded matrices
+    # filter dims
+    f_h = lr.f_h
+    f_w = lr.f_w
+    outch = lr.outch
+    prev_h, prev_w, inch, _ = size(prevlayer.a)
+    # prev_h =  prevlayer.out_h
+    # prev_w = prevlayer.out_w
+    # inch = prevlayer.outch
+    pad = ifelse(lr.padrule == :same, 1, 0)
+    # output image dims: calculated once rather than over and over in training loop
+    out_h = div((prev_h + 2pad - f_h), lr.stride) + 1
+    out_w = div((prev_w + 2pad - f_w), lr.stride) + 1
+    # backprop dimensions   
+    b_out_h = prev_h   # lsvec[idx-1].h   
+    b_out_w = prev_w   # lsvec[idx-1].w   
+    b_out_c = inch  # lsvec[idx-1].outch     
+    ConvLayer(
+        name = lr.name,
+        activationf =   if lr.activation ==  :relu 
+                            relu!
+                        elseif lr.activation == :none
+                            noop
+                        else error("Only :relu, and :none  supported, not $(Symbol(lr.activation)).")
+                        end,
+        adj = lr.adj,
+        weight=he_initialize((f_h,f_w,inch,outch),scale=2.2, adj=lr.adj),
+        f_h=f_h,
+        f_w=f_w,
+        inch=inch,
+        outch=outch,
+        padrule=lr.padrule,   # this is Symbol for kind of padding either :same or :none
+        stride=lr.stride,
+        bias=zeros(outch),
+        pad_x = zeros(out_h+2pad, out_w+2pad, inch,n_samples),
+        z=zeros(out_h, out_w, outch, n_samples),
+        a=zeros(out_h, out_w, outch, n_samples),
+        out_h = out_h,
+        out_w = out_w,
+        in_h = b_out_h,
+        in_w = b_out_w,
+        eps_l=zeros(b_out_h, b_out_w, b_out_c, n_samples),  
+        grad_a=zeros(out_h, out_w, outch, n_samples),
+        pad_next_eps=zeros(b_out_h, b_out_w, outch, n_samples),
+        grad_weight=zeros(f_h, f_w, inch, outch),
+        grad_bias=zeros(outch),
+        b=n_samples)  # not clear we need this!
 end
 
 
@@ -186,6 +263,33 @@ Base.@kwdef mutable struct LinearLayer
     grad_bias::Vector{Float64} = Float64[]
 end
 
+# method to do prep calculations based on LayerSpec inputs, then create a LinearLayer
+function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
+    # weight dims
+    outputs=lr.h        # rows
+    inputs=prevlayer.output_dim    # columns
+    LinearLayer(
+        name = lr.name,
+        activationf =   if lr.activation ==  :relu 
+                            relu!
+                        elseif lr.activation == :none
+                            noop
+                        elseif lr.activation == :softmax
+                            softmax!
+                        else error("Only :relu, :softmax and :none  supported, not $(Symbol(lr.activation)).")
+                        end,
+        adj = lr.adj,
+        weight = he_initialize((outputs, inputs), scale=1.5, adj=lr.adj),
+        output_dim =  outputs,
+        input_dim =   inputs,
+        bias = zeros(outputs),
+        z=zeros(outputs, n_samples),
+        a=zeros(outputs, n_samples),
+        eps_l = zeros(outputs, n_samples),
+        grad_a = zeros(outputs, n_samples),
+        grad_weight = zeros(outputs, inputs),
+        grad_bias = zeros(outputs))  
+end
 
 # no weight, bias, gradients, activation
 Base.@kwdef mutable struct FlattenLayer
@@ -200,13 +304,33 @@ Base.@kwdef mutable struct FlattenLayer
     eps_l::Array{Float64,4}=Float64[;;;;]
 end
 
+# method to prepare inputs and create layer
+function FlattenLayer(lr::LayerSpec, prevlayer, n_samples)
+    # h = prevlayer.out_h        # lsvec[idx-1].h
+    # w = prevlayer.out_w        # lsvec[idx-1].w
+    # ch = prevlayer.outch   # lsvec[idx-1].outch
+    h, w, ch, _ = size(prevlayer.a)
+
+    output_dim = h*w*ch
+    FlattenLayer(
+        name = lr.name,
+        h=h,
+        w=w,
+        ch=ch,
+        b=n_samples;
+        output_dim=output_dim,
+        a=zeros(output_dim, n_samples),
+        dl_dflat = zeros(output_dim, n_samples),
+        eps_l=zeros(h,w,ch,n_samples)
+        )
+end
 
 Base.@kwdef mutable struct InputLayer     # we only have this to simplify feedforward loop
     name::Symbol = :noname
     kind::Symbol = :image   # other allowed value is :linear
     out_h::Int64 = 0
     out_w::Int64 = 0
-    out_c::Int64 = 0
+    outch::Int64 = 0
     a::Array{Float64}   # no default provided because dims different for :image vs :linear
 end
 
@@ -216,6 +340,7 @@ Base.@kwdef mutable struct MaxPoolLayer
     pool_size::Tuple{Int,Int}
     in_h::Int64=0
     in_w::Int64=0
+    outch::Int64=0
     # input_shape::Tuple{Int,Int,Int, Int}
     # should we have output_shape?
     a::Array{Float64, 4} = Float64[;;;;]
@@ -223,6 +348,24 @@ Base.@kwdef mutable struct MaxPoolLayer
     eps_l::Array{Float64, 4} = Float64[;;;;]
 end
 
+# method to prepare inputs and create layer
+function MaxPoolLayer(lr::LayerSpec, prevlayer, n_samples)
+    in_h = prevlayer.out_h  # layerdat[idx-1].out_h
+    in_w = prevlayer.out_w  # layerdat[idx-1].out_w
+    out_h = div(in_h, lr.f_h) # assume stride = lr.f_h implicit in code
+    out_w = div(in_w,lr.f_w)  # ditto
+    outch = prevlayer.outch # layerdat[idx-1].outch
+    batch_size=n_samples
+    MaxPoolLayer(
+        name  = lr.name,
+        pool_size = (lr.f_h, lr.f_w),
+        outch = outch,
+        a = zeros(out_h, out_w, outch, batch_size),
+        mask = falses(in_h, in_w, outch, batch_size),
+        eps_l = zeros(in_h, in_w, outch, batch_size),
+        in_h = in_h,
+        in_w = in_w)
+end
 
 Base.@kwdef mutable struct stat_series
     acc::Array{Float64, 1} = Float64[]
@@ -242,7 +385,7 @@ end
 function show_array_sizes(layer::ConvLayer)
     @show layer.name
     @show size(layer.z)
-    @show size(layer.pad_z)
+    @show size(layer.pad_x)
     @show size(layer.a)
     @show size(layer.a_below)
     @show size(layer.eps_l)
@@ -335,136 +478,19 @@ function allocate_layers(lsvec::Vector{LayerSpec}, n_samples)
                         kind = lr.kind,
                         out_h = lr.h,
                         out_w = lr.w,
-                        out_c = lr.outch,
+                        outch = lr.outch,
                         a = zeros(lr.h, lr.w, lr.outch, n_samples),
                         ))
-            prev_h = lr.h    # must use layerspec for input layer
-            prev_w = lr.w
-            prev_ch = lr.outch
             end
             continue  # skip the ifs and go to next lr
         elseif lr.kind == :conv
-            # TODO inclde logic to set sizes of output matrices and padded matrices
-            # filter dims
-            f_h = lr.f_h
-            f_w = lr.f_w
-            inch = prev_ch
-            outch = lr.outch
-            pad = ifelse(lr.pad == :same, 1, 0)
-            # output image dims: calculated
-            out_h = div((prev_h + 2pad - f_h), lr.stride) + 1
-            out_w = div((prev_w + 2pad - f_w), lr.stride) + 1
-            # backprop dimensions   TODO this needs to be tested
-            b_out_h = prev_h   # lsvec[idx-1].h   
-            b_out_w = prev_w   # lsvec[idx-1].w   
-            b_out_c = prev_ch  # lsvec[idx-1].outch   
-            # @show lr.adj
-            push!(layerdat,
-                ConvLayer(  
-                    name = lr.name,
-                    activationf =   if lr.activation ==  :relu 
-                                        relu!
-                                    elseif lr.activation == :none
-                                        noop
-                                    else error("Only :relu, and :none  supported, not $(Symbol(lr.activation)).")
-                                    end,
-                    adj = lr.adj,
-                    weight=he_initialize((f_h,f_w,inch,outch),scale=2.2, adj=lr.adj),
-                    f_h=f_h,
-                    f_w=f_w,
-                    inch=prev_ch,
-                    outch=outch,
-                    pad=lr.pad,   # this is Symbol for kind of padding either :same or :none
-                    stride=lr.stride,
-                    bias=zeros(outch),
-                    z=zeros(out_h, out_w, outch, n_samples),
-                    a=zeros(out_h, out_w, outch, n_samples),
-                    out_h = out_h,
-                    out_w = out_w,
-                    in_h = b_out_h,
-                    in_w = b_out_w,
-                    eps_l=zeros(b_out_h, b_out_w, b_out_c, n_samples),  
-                    grad_a=zeros(out_h, out_w, outch, n_samples),
-                    pad_next_eps=zeros(b_out_h, b_out_w, outch, n_samples),
-                    grad_weight=zeros(f_h, f_w, inch, outch),
-                    grad_bias=zeros(outch),
-                    b=n_samples  # not clear we need this!
-                    ))   
-            prev_h = out_h
-            prev_w = out_w
-            prev_ch = outch
-
+            push!(layerdat, ConvLayer(lr, layerdat[idx-1], n_samples))
         elseif lr.kind == :linear
-            # weight dims
-            outputs=lr.h
-            # inputs = layerdat[idx-1].output_dim
-            inputs = prev_h
-            # output dims
-            # @show lr.adj
-            push!(layerdat,
-                LinearLayer(
-                    name = lr.name,
-                    activationf =   if lr.activation ==  :relu 
-                                        relu!
-                                    elseif lr.activation == :none
-                                        noop
-                                    elseif lr.activation == :softmax
-                                        softmax!
-                                    else error("Only :relu, :softmax and :none  supported, not $(Symbol(lr.activation)).")
-                                    end,
-                    adj = lr.adj,
-                    weight = he_initialize((outputs, inputs), scale=1.5, adj=lr.adj),
-                    output_dim =  outputs,
-                    input_dim =   inputs,
-                    bias = zeros(outputs),
-                    z=zeros(outputs, n_samples),
-                    a=zeros(outputs, n_samples),
-                    eps_l = zeros(outputs, n_samples),
-                    grad_a = zeros(outputs, n_samples),
-                    grad_weight = zeros(outputs, inputs),
-                    grad_bias = zeros(outputs),
-                    ))
-            prev_h = outputs
+            push!(layerdat, LinearLayer(lr, layerdat[idx-1], n_samples))
         elseif lr.kind == :maxpool
-            in_h = prev_h  # layerdat[idx-1].out_h
-            in_w = prev_w  # layerdat[idx-1].out_w
-            out_h = div(layerdat[idx-1].out_h, lr.f_h) # assume stride = lr.f_h implicit in code
-            out_w = div(layerdat[idx-1].out_w,lr.f_w)  # ditto
-            outch = prev_ch # layerdat[idx-1].outch
-            batch_size=layerdat[idx-1].b
-            push!(layerdat,
-                MaxPoolLayer(
-                    name = lr.name,
-                    pool_size = (lr.f_h, lr.f_w),
-                    a = zeros(out_h, out_w, outch, batch_size),
-                    mask = falses(in_h, in_w, outch, batch_size),
-                    eps_l = zeros(in_h, in_w, outch, batch_size),
-                    in_h = in_h,
-                    in_w = in_w
-                    ))
-            prev_h = out_h
-            prev_w = out_w
-            prev_ch = outch
+            push!(layerdat, MaxPoolLayer(lr, layerdat[idx-1], n_samples))
         elseif lr.kind == :flatten
-            h = prev_h      # lsvec[idx-1].h
-            w = prev_w      # lsvec[idx-1].w
-            ch = prev_ch    # lsvec[idx-1].outch
-            output_dim = h*w*ch
-            b = n_samples
-            push!(layerdat,
-                FlattenLayer(
-                    name = lr.name,
-                    h=h,
-                    w=w,
-                    ch=ch,
-                    b=b;
-                    output_dim=output_dim,
-                    a=zeros(output_dim, n_samples),
-                    dl_dflat = zeros(output_dim, n_samples),
-                    eps_l=zeros(h,w,ch,n_samples)
-                    ))
-            prev_h = output_dim
-            # not setting prev_w and prev_ch as next feedforward layer following :flatten must be linear
+            push!(layerdat, FlattenLayer(lr, layerdat[idx-1], n_samples))
         else
             error("Found unrecognized layer kind")
         end
@@ -509,7 +535,7 @@ end
 # backprop layers are all called layer_backward! and dispatch on the layer type
 
 function layer_forward!(layer::ConvLayer, x::AbstractArray{Float64,4}, batch_size)
-    layer.a_below = x
+    layer.a_below = x   # as an alias, this might not work for backprop though it seems to
     # weight dims
     f_h = layer.f_h
     f_w = layer.f_w
@@ -518,11 +544,11 @@ function layer_forward!(layer::ConvLayer, x::AbstractArray{Float64,4}, batch_siz
     # input image dims
     in_h = layer.in_h
     in_w = layer.in_w
-    H_out = in_h - f_h + 1  # smaller than the input h and w of x
-    W_out = in_w - f_w + 1
+    H_out = layer.out_h
+    W_out = layer.out_w
 
-    if layer.pad == :same
-        # do the padding
+    if layer.padrule == :same  # we know padding = 1 for :same
+        @views layer.pad_x[begin+1:end-1, begin+1:end-1, :, :] .= x 
     end
 
     @inbounds for b in 1:batch_size
@@ -532,7 +558,7 @@ function layer_forward!(layer::ConvLayer, x::AbstractArray{Float64,4}, batch_siz
                     for ic = 1:in_channels
                         for fh in 1:f_h
                             for fw in 1:f_w
-                                layer.z[i,j,oc, b] = (x[i+fh-1, j+fw-1, ic, b] 
+                                layer.z[i,j,oc, b] = (layer.pad_x[i+fh-1, j+fw-1, ic, b] 
                                     * layer.weight[fh,fw,ic,oc] + layer.bias[oc])
                             end
                         end
@@ -544,9 +570,6 @@ function layer_forward!(layer::ConvLayer, x::AbstractArray{Float64,4}, batch_siz
     # activation
     layer.activationf(layer, layer.adj)
 
-    # println("Feedforward of conv outputs")
-    # @show size(layer.z)
-    # @show size(layer.a)
     return     # nothing
 end
 
@@ -564,27 +587,17 @@ function layer_backward!(layer::ConvLayer, layer_next, n_samples)
     fill!(layer.grad_weight, 0.0)  # reinitialization to allow accumulation of convolutions
     fill!(layer.eps_l, 0.0)
     fill!(layer.grad_a , 0.0)
-
-    # println("\n***** $(layer.name)")
-    # @show size(layer.eps_l)
-    # @show size(layer_next.eps_l)
-    # @show size(layer.pad_next_eps)
-    # @show size(layer.z)
-    # @show size(layer.grad_a)
         
     relu_grad!(layer.grad_a, layer.z, layer.adj)
     layer_next.eps_l .*= layer.grad_a     
 
-    # Compute layer loss using pad_next_eps rather than the actual eps_l of the next layer, which is the wrong size
-        # assumes pad of 1 pixel on all sides  
-
-    if layer.pad == :none
-        # now test for padding of lower layer if its conv
+    if layer.padrule == :none
+        # TODO does this work? and test if previous layer is img formatted (one of input, conv, maxpooling)
 
         layer.pad_next_eps .= 0.0
         @views layer.pad_next_eps[2:end-1, 2:end-1, :, :] .= layer_next.eps_l
-    elseif layer.pad == :same
-        # do something else
+    elseif layer.padrule == :same
+        # nothing to do: arrays are going to come out the right size
     end
 
 
