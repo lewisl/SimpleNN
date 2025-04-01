@@ -6,7 +6,7 @@ using StatsBase
 
 sample_size = 10_000
 minibatch_size = 50
-epochs=15
+epochs=15    # 20 epochs yields near perfect training convergence
 lr=0.06
 
 ## 

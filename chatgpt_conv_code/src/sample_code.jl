@@ -7,15 +7,12 @@ TODO
 =#
 
 
-
 using Random
 using LinearAlgebra
 using Colors, Plots
 using Serialization
 using MLDatasets
 using StatsBase
-
-
 
 
 # ============================
@@ -26,15 +23,15 @@ using StatsBase
     name::Symbol=:noname
     kind::Symbol=:none
     activation::Symbol=:none
-    adj::Float64=0  # leaky_relu factor. also for he_initialize
-    h::Int64=0
-    w::Int64=0
+    adj::Float64=0      # leaky_relu factor. also for he_initialize
+    h::Int64=0          # image height (rows) or output neurons
+    w::Int64=0          # image width (columns)
     outch::Int64=0
-    f_h::Int64=0
-    f_w::Int64=0
+    f_h::Int64=0        # filter height (rows)
+    f_w::Int64=0        # filter width (columns)
     inch::Int64=0
-    padrule::Symbol=:same        # no input required to accept default
-    stride::Int64=1          # no input required to accept default
+    padrule::Symbol=:same       # either :same or :none
+    stride::Int64=1             # no input required to accept default
 end
 
 # LayerSpec methods for specific kinds of layers
@@ -55,71 +52,46 @@ end
 # Sample model definitions
 # ============================
 
-function conv_specs()
-    input = LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
-    conv1 = LayerSpec(h=26, w=26, outch=4, f_h=3, f_w=3, inch=1, kind=:conv, name=:conv1, activation=:relu, adj=0.002)
-    conv2 = LayerSpec(h=24, w=24, outch=8, f_h=3, f_w=3, inch=4, kind=:conv, name=:conv2, activation=:relu, adj=0.002)
-    flatten = LayerSpec(h=24, w=24, outch=8, kind=:flatten, name=:flatten)
-    linear1 = LayerSpec(h=2000, kind=:linear, activation=:relu, name=:linear1, adj=0.002)
-    linear2 = LayerSpec(h=1000, kind=:linear, activation=:relu, name=:linear2, adj=0.002)
-    linear3 = LayerSpec(h=500, kind=:linear, activation=:relu, name=:linear3, adj=0.002)
-    linear4 = LayerSpec(h=100, kind=:linear, activation=:relu, name=:linear4, adj=0.002)
-    linear5 = LayerSpec(h=10, kind=:linear,activation=:softmax, name=:output)
-
-    layerspecs = LayerSpec[]
-    push!(layerspecs, input, conv1, conv2, flatten, linear1, linear2, linear3, linear4, linear5)
-
-    return layerspecs
-end
-
+big_conv = LayerSpec[
+    LayerSpec(h=28, w=28, outch=10, kind=:input, name=:input)
+    LayerSpec(h=26, w=26, outch=4, f_h=3, f_w=3, inch=1, kind=:conv, name=:conv1, activation=:relu, adj=0.002)
+    LayerSpec(h=24, w=24, outch=4, f_h=3, f_w=3, inch=4, kind=:conv, name=:conv2, activation=:relu, adj=0.002)
+    LayerSpec(h=24, w=24, outch=4, kind=:flatten, name=:flatten)
+    LayerSpec(h=500, kind=:linear, activation=:relu, name=:linear3, adj=0.002)
+    LayerSpec(h=100, kind=:linear, activation=:relu, name=:linear4, adj=0.002)
+    LayerSpec(h=10, kind=:linear,activation=:softmax, name=:output)
+    ]
 
 small_conv = LayerSpec[
         LayerSpec(name=:input, h=28, w=28, outch=1, kind=:input, )
         convlayerspec(name=:conv1, outch=32, f_h=3, f_w=3, activation=:relu, adj=0.0)
         LayerSpec(f_h=2, f_w=2, kind=:maxpool, name=:maxpool1)
-        convlayerspec(name=:conv2, outch=48, f_h=3, f_w=3, activation=:relu, adj=0.0)
-        LayerSpec(name=:maxpool2, f_h=2, f_w=2, kind=:maxpool, )
+        # convlayerspec(name=:conv2, outch=48, f_h=3, f_w=3, activation=:relu, adj=0.0)
+        # LayerSpec(name=:maxpool2, f_h=2, f_w=2, kind=:maxpool, )
         LayerSpec(name=:flatten, kind=:flatten)
         LayerSpec(name=:linear1, h=128, kind=:linear, activation=:relu, adj=0.0)
-        LayerSpec(name=:linear2, h=64, kind=:linear, activation=:relu, adj=0.0)
+        # LayerSpec(name=:linear2, h=64, kind=:linear, activation=:relu, adj=0.0)
         LayerSpec(name=:output, h=10, kind=:linear, activation=:softmax, )
         ]
 
 little_conv = LayerSpec[
-        LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input),
-        convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, adj=0.0),
-        LayerSpec(f_h=2, f_w=2, kind=:maxpool, name=:maxpool2),
-        LayerSpec(kind=:flatten, name=:flatten),
-        LayerSpec(h=128, kind=:linear, activation=:relu, name=:linear1, adj=0.0),
-        LayerSpec(h=64, kind=:linear, activation=:relu, name=:linear2, adj=0.0),
+        LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
+        convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, adj=0.0)
+        LayerSpec(f_h=2, f_w=2, kind=:maxpool, name=:maxpool2)
+        LayerSpec(kind=:flatten, name=:flatten)
+        LayerSpec(h=128, kind=:linear, activation=:relu, name=:linear1, adj=0.0)
+        LayerSpec(h=64, kind=:linear, activation=:relu, name=:linear2, adj=0.0)
         LayerSpec(h=10, kind=:linear, activation=:softmax, name=:output)
         ]
 
-function simple_specs()
-    input = LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
-    flatten = LayerSpec(h=28, w=28, outch=1, kind=:flatten, name=:flatten)
-    linear1 = LayerSpec(h=200, kind=:linear, activation=:relu, name=:linear1, adj=0.01)
-    linear2 = LayerSpec(h=200, kind=:linear, activation=:relu, name=:linear2, adj=0.01)
-    linear3 = LayerSpec(h=10, kind=:linear, name=:output, activation=:softmax)
+three_linear = LayerSpec[
+    LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
+    LayerSpec(kind=:flatten, name=:flatten)
+    LayerSpec(h=200, kind=:linear, activation=:relu, name=:linear1, adj=0.01)
+    LayerSpec(h=200, kind=:linear, activation=:relu, name=:linear2, adj=0.01)
+    LayerSpec(h=10, kind=:linear, name=:output, activation=:softmax)
+    ]
 
-    layerspecs = LayerSpec[]
-    push!(layerspecs, input,  flatten, linear1, linear2, linear3)
-
-    return layerspecs
-end
-
-function deep_specs()
-    input = LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
-    flatten = LayerSpec(h=28, w=28, outch=1, kind=:flatten, name=:flatten)
-    linear1 = LayerSpec(h=600, kind=:linear, name=:linear1, activation=:relu, adj=0.0001)
-    linear2 = LayerSpec(h=200, kind=:linear, name=:Linear2, activation=:relu, adj=0.0001)
-    linear3 = LayerSpec(h=10, kind=:linear, name=:output, activation=:softmax)
-
-    layerspecs = LayerSpec[]
-    push!(layerspecs, input,  flatten, linear1, linear2, linear3)
-
-    return layerspecs
-end
 
 
 # method to pass a function
@@ -164,11 +136,6 @@ Base.@kwdef mutable struct ConvLayer
     activationf::Function = relu!
     adj::Float64 = 0.0
     weight::Array{Float64,4} = Float64[;;;;]  # (filter_h, filter_w, in_channels, out_channels)
-    # weight dims
-    f_h::Int64 = 0
-    f_w::Int64 = 0
-    inch::Int64 = 0
-    outch::Int64 = 0
     padrule::Symbol = :same   # other option is :none
     stride::Int64 = 1     # assume stride is symmetrical for now
     bias::Vector{Float64} = Float64[]    # (out_channels)
@@ -176,39 +143,25 @@ Base.@kwdef mutable struct ConvLayer
     pad_x::Array{Float64, 4} = Float64[;;;;]
     a::Array{Float64,4} = Float64[;;;;]
     a_below::Array{Float64, 4} = Float64[;;;;]  
-    # image dims
-    out_h::Int64 = 0  # we can set this during allocation and not recalc in training loop
-    out_w::Int64 = 0  # ditto
-    in_h::Int64 = 0   # ditto 
-    in_w::Int64 = 0   # ditto
     eps_l::Array{Float64,4} = Float64[;;;;]
     pad_next_eps::Array{Float64,4} = Float64[;;;;]  # TODO need to test if this is needed given successive conv layer sizes
     grad_a::Array{Float64,4} = Float64[;;;;]
     grad_weight::Array{Float64,4} = Float64[;;;;]
     grad_bias::Vector{Float64} = Float64[]
-
-    b::Int64 = 0  
 end
 
 # method to do prep calculations based on LayerSpec inputs, then create a LinearLayer
 function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
-    # TODO inclde logic to set sizes of output matrices and padded matrices
-    # filter dims
-    f_h = lr.f_h
-    f_w = lr.f_w
     outch = lr.outch
     prev_h, prev_w, inch, _ = size(prevlayer.a)
-    # prev_h =  prevlayer.out_h
-    # prev_w = prevlayer.out_w
-    # inch = prevlayer.outch
+
+
+    @show prev_h, prev_w
+
     pad = ifelse(lr.padrule == :same, 1, 0)
     # output image dims: calculated once rather than over and over in training loop
-    out_h = div((prev_h + 2pad - f_h), lr.stride) + 1
-    out_w = div((prev_w + 2pad - f_w), lr.stride) + 1
-    # backprop dimensions   
-    b_out_h = prev_h   # lsvec[idx-1].h   
-    b_out_w = prev_w   # lsvec[idx-1].w   
-    b_out_c = inch  # lsvec[idx-1].outch     
+    out_h = div((prev_h + 2pad - lr.f_h), lr.stride) + 1
+    out_w = div((prev_w + 2pad - lr.f_w), lr.stride) + 1
     ConvLayer(
         name = lr.name,
         activationf =   if lr.activation ==  :relu 
@@ -218,27 +171,19 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
                         else error("Only :relu, and :none  supported, not $(Symbol(lr.activation)).")
                         end,
         adj = lr.adj,
-        weight=he_initialize((f_h,f_w,inch,outch),scale=2.2, adj=lr.adj),
-        f_h=f_h,
-        f_w=f_w,
-        inch=inch,
-        outch=outch,
-        padrule=lr.padrule,   # this is Symbol for kind of padding either :same or :none
+        weight=he_initialize((lr.f_h, lr.f_w, inch, lr.outch), scale=2.2, adj=lr.adj),
+        padrule=lr.padrule,   
         stride=lr.stride,
         bias=zeros(outch),
-        pad_x = zeros(out_h+2pad, out_w+2pad, inch,n_samples),
+        pad_x = zeros(out_h + 2pad, out_w + 2pad, inch, n_samples),
         z=zeros(out_h, out_w, outch, n_samples),
         a=zeros(out_h, out_w, outch, n_samples),
-        out_h = out_h,
-        out_w = out_w,
-        in_h = b_out_h,
-        in_w = b_out_w,
-        eps_l=zeros(b_out_h, b_out_w, b_out_c, n_samples),  
+        eps_l=zeros(prev_h, prev_w, inch, n_samples),  
         grad_a=zeros(out_h, out_w, outch, n_samples),
-        pad_next_eps=zeros(b_out_h, b_out_w, outch, n_samples),
-        grad_weight=zeros(f_h, f_w, inch, outch),
+        pad_next_eps=zeros(prev_h, prev_w, outch, n_samples),
+        grad_weight=zeros(lr.f_h, lr.f_w, inch, outch),
         grad_bias=zeros(outch),
-        b=n_samples)  # not clear we need this!
+        )  
 end
 
 
@@ -294,10 +239,6 @@ end
 # no weight, bias, gradients, activation
 Base.@kwdef mutable struct FlattenLayer
     name::Symbol = :noname
-    h::Int64=0
-    w::Int64=0
-    ch::Int64=0
-    b::Int64=0
     output_dim::Int64=0
     dl_dflat::Array{Float64,2}=Float64[;;]
     a::Array{Float64,2}=Float64[;;]
@@ -306,22 +247,15 @@ end
 
 # method to prepare inputs and create layer
 function FlattenLayer(lr::LayerSpec, prevlayer, n_samples)
-    # h = prevlayer.out_h        # lsvec[idx-1].h
-    # w = prevlayer.out_w        # lsvec[idx-1].w
-    # ch = prevlayer.outch   # lsvec[idx-1].outch
     h, w, ch, _ = size(prevlayer.a)
+    output_dim = h * w * ch
 
-    output_dim = h*w*ch
     FlattenLayer(
         name = lr.name,
-        h=h,
-        w=w,
-        ch=ch,
-        b=n_samples;
         output_dim=output_dim,
         a=zeros(output_dim, n_samples),
         dl_dflat = zeros(output_dim, n_samples),
-        eps_l=zeros(h,w,ch,n_samples)
+        eps_l=zeros(h, w, ch, n_samples)
         )
 end
 
@@ -338,11 +272,7 @@ end
 Base.@kwdef mutable struct MaxPoolLayer
     name::Symbol = :noname
     pool_size::Tuple{Int,Int}
-    in_h::Int64=0
-    in_w::Int64=0
     outch::Int64=0
-    # input_shape::Tuple{Int,Int,Int, Int}
-    # should we have output_shape?
     a::Array{Float64, 4} = Float64[;;;;]
     mask::Array{Bool,4} = Bool[;;;;]
     eps_l::Array{Float64, 4} = Float64[;;;;]
@@ -350,12 +280,12 @@ end
 
 # method to prepare inputs and create layer
 function MaxPoolLayer(lr::LayerSpec, prevlayer, n_samples)
-    in_h = prevlayer.out_h  # layerdat[idx-1].out_h
-    in_w = prevlayer.out_w  # layerdat[idx-1].out_w
+
+    in_h, in_w, outch, _ = size(prevlayer.grad_a)
     out_h = div(in_h, lr.f_h) # assume stride = lr.f_h implicit in code
     out_w = div(in_w,lr.f_w)  # ditto
-    outch = prevlayer.outch # layerdat[idx-1].outch
     batch_size=n_samples
+
     MaxPoolLayer(
         name  = lr.name,
         pool_size = (lr.f_h, lr.f_w),
@@ -363,8 +293,7 @@ function MaxPoolLayer(lr::LayerSpec, prevlayer, n_samples)
         a = zeros(out_h, out_w, outch, batch_size),
         mask = falses(in_h, in_w, outch, batch_size),
         eps_l = zeros(in_h, in_w, outch, batch_size),
-        in_h = in_h,
-        in_w = in_w)
+        )
 end
 
 Base.@kwdef mutable struct stat_series
@@ -465,7 +394,6 @@ function allocate_layers(lsvec::Vector{LayerSpec}, n_samples)
     prev_h = 0
     prev_w = 0
     prev_ch = 0
-    # n_samples
 
     for (idx,lr)  in enumerate(lsvec)
         if idx == 1
@@ -536,28 +464,21 @@ end
 
 function layer_forward!(layer::ConvLayer, x::AbstractArray{Float64,4}, batch_size)
     layer.a_below = x   # as an alias, this might not work for backprop though it seems to
-    # weight dims
-    f_h = layer.f_h
-    f_w = layer.f_w
-    in_channels = layer.inch
-    out_channels = layer.outch
-    # input image dims
-    in_h = layer.in_h
-    in_w = layer.in_w
-    H_out = layer.out_h
-    W_out = layer.out_w
+    f_h, f_w, in_channels, out_channels = size(layer.weight) # weight dims 
+    in_h, in_w, _, _ = size(layer.eps_l)  # input image dims
+    H_out, W_out, _, _ = size(layer.z)   # output image dims
 
     if layer.padrule == :same  # we know padding = 1 for :same
         @views layer.pad_x[begin+1:end-1, begin+1:end-1, :, :] .= x 
     end
 
-    @inbounds for b in 1:batch_size
-        for oc = 1:out_channels
-            for j = 1:W_out
-                for i = 1:H_out
-                    for ic = 1:in_channels
-                        for fh in 1:f_h
-                            for fw in 1:f_w
+    @inbounds for b in axes(layer.z, 4)
+        for oc in axes(layer.z, 3)
+            for j in axes(layer.z, 2)
+                for i in axes(layer.z, 1)
+                    for ic in axes(layer.weight, 3)
+                        for fw in axes(layer.weight, 2)
+                            for fh in axes(layer.weight, 1)
                                 layer.z[i,j,oc, b] = (layer.pad_x[i+fh-1, j+fw-1, ic, b] 
                                     * layer.weight[fh,fw,ic,oc] + layer.bias[oc])
                             end
@@ -575,41 +496,39 @@ end
 
 
 function layer_backward!(layer::ConvLayer, layer_next, n_samples)
-    # weight (filter) dims
-    f_h = layer.f_h
-    f_w = layer.f_w
-    inch = layer.inch
-    outch = layer.outch
-    # input image dims
-    # output image dims
-    H_out = layer.in_h
-    W_out = layer.out_h
+    f_h, f_w, _, _ = size(layer.weight)
+    H_out, W_out, _, _ = size(layer.eps_l)
+
     fill!(layer.grad_weight, 0.0)  # reinitialization to allow accumulation of convolutions
     fill!(layer.eps_l, 0.0)
     fill!(layer.grad_a , 0.0)
         
     relu_grad!(layer.grad_a, layer.z, layer.adj)
+
+    # @show size(layer_next.eps_l)
+    # @show size(layer.grad_a)
+
     layer_next.eps_l .*= layer.grad_a     
 
     if layer.padrule == :none
         # TODO does this work? and test if previous layer is img formatted (one of input, conv, maxpooling)
-
-        layer.pad_next_eps .= 0.0
+        fill!(layer.pad_next_eps, 0.0)
         @views layer.pad_next_eps[2:end-1, 2:end-1, :, :] .= layer_next.eps_l
     elseif layer.padrule == :same
         # nothing to do: arrays are going to come out the right size
     end
 
 
-    @inbounds for b = 1:n_samples
-        for oc = 1:outch
+    # @inbounds for b = 1:n_samples  # -> axes(eps_l, 4)
+    @inbounds for b in axes(layer.eps_l, 4)
+        for oc in axes(layer.weight, 4)
             for i = 1:H_out-(f_h-1) # prevent filter from extending out of bounds
-                for j = 1:W_out-(f_w-1)
-                    for ic = 1:inch
-                        for fj = 1:f_w
-                            for fi = 1:f_h
+                for j = 1:W_out-(f_w-1)  
+                    for ic in axes(layer.weight, 3)
+                        for fj in axes(layer.weight,2)
+                            for fi in axes(layer.weight,1)
                                 # Flipped weight indices for backward pass: use weight[f_h-fi+1,f_w-fj+1] instead of weight[fi,fj]
-                                layer.eps_l[i+fi-1,j+fj-1,ic,b] += layer.weight[f_h-fi+1,f_w-fj+1,ic,oc] * layer.pad_next_eps[i,j,oc,b] 
+                                layer.eps_l[i+fi-1,j+fj-1,ic,b] += layer.weight[f_h-fi+1, f_w-fj+1, ic, oc] * layer.pad_next_eps[i,j,oc,b] 
                             end
                         end
                     end
@@ -627,17 +546,12 @@ function layer_backward!(layer::ConvLayer, layer_next, n_samples)
         layer.grad_bias[oc] = sum(layer.eps_l[:,:,oc,:]) .* (1.0 / Float64(n_samples))
     end
 
-    # @show size(layer.grad_bias)
-    # @show size(layer.eps_l)
-    # @show size(layer.grad_a)
-
     return     # nothing
 end
 
 function compute_grad_weight!(layer, n_samples)
-    H_out, W_out = size(layer.eps_l, 1), size(layer.eps_l, 2)
-    f_h, f_w = size(layer.grad_weight, 1), size(layer.grad_weight, 2)
-    batch_size = size(layer.a_below, 4)
+    H_out, W_out, _, batch_size = size(layer.eps_l)
+    f_h, f_w, _, _ = size(layer.grad_weight)
     # @assert f_h == 3 && f_w == 3  # given 3x3 filters (for clarity)
 
     # Initialize grad_weight to zero
@@ -651,8 +565,8 @@ function compute_grad_weight!(layer, n_samples)
             # View of the input activation for this channel
             # (We'll slide this view for each filter offset)
             input_chan = @view layer.a_below[:, :, ic, :]   # size H_in × W_in × batch_size
-            for fj in 1:f_w
-                for fi in 1:f_h
+            for fj in axes(layer.weight,2)
+                for fi in axes(layer.weight,1)
                     # Extract the overlapping region of input corresponding to eps_l[:, :, oc, :]
                     local_patch = @view input_chan[fi:fi+H_out-1, fj:fj+W_out-1, :]
                     # Accumulate gradient for weight at (fi,fj, ic, oc)
@@ -672,9 +586,7 @@ end
 function layer_forward!(layer::MaxPoolLayer, x::Array{Float64,4}, n_samples)
     # layer.input_shape = size(x)
     (pool_h, pool_w) = layer.pool_size
-    (_, _, C, B) = size(layer.a)
-    H_out = div(layer.in_h, pool_h)
-    W_out = div(layer.in_w, pool_w)
+    (H_out, W_out, C, B) = size(layer.a)
     # re-initialize
     fill!(layer.a, 0.0)   
     fill!(layer.mask, false)
@@ -700,17 +612,15 @@ function layer_forward!(layer::MaxPoolLayer, x::Array{Float64,4}, n_samples)
     return  # nothing
 end
 
-# tested:  appears to work
+
 function layer_backward!(layer::MaxPoolLayer, layer_next, n_samples)
-    # (H, W, C, B) = layer.input_shape
-    # do we need to initialize layer.eps_l?
     fill!(layer.eps_l, 0.0)
     (pool_h, pool_w) = layer.pool_size
     (H_in, W_in, C_in, B) = size(layer_next.eps_l)
     @inbounds for bn = 1:B
         for c = 1:C_in
-            for j = 1:W_in
-                for i = 1:H_in
+            for j = axes(layer_next.eps_l, 2)  #  1:W_in
+                for i =  axes(layer_next.eps_l, 1) #  1:H_in
                     for b = 1:pool_w, a = 1:pool_h   # gives 2 rows and 2 columns for each i, j
                         if layer.mask[pool_h*(i-1)+a, pool_w*(j-1)+b, c, bn]
                             layer.eps_l[pool_h*(i-1)+a, pool_w*(j-1)+b, c, bn] = layer_next.eps_l[i,j,c, bn]
@@ -726,7 +636,7 @@ end
 
 
 function layer_forward!(layer::FlattenLayer, x::Array{Float64, 4}, batch_size) 
-    layer.a .= reshape(x,:,layer.b)
+    layer.a .= reshape(x,:,batch_size)  
     return     # nothing
 end
 
@@ -735,10 +645,11 @@ function layer_backward!(layer::FlattenLayer, layer_next::LinearLayer, batch_siz
     # Use pre-allocated dl_dflat array for matrix multiplication
     mul!(layer.dl_dflat, layer_next.weight', layer_next.eps_l)  # in-place matrix multiplication
     # Reshape in-place using views
+    h, w, ch, _ = size(layer.eps_l)
     @inbounds for i in 1:batch_size
-        layer.eps_l[:,:,:,i] .= reshape(@view(layer.dl_dflat[:,i]), layer.h, layer.w, layer.ch)
+        layer.eps_l[:,:,:,i] .= reshape(@view(layer.dl_dflat[:,i]), h, w, ch)
     end
-    return     # nothing
+    return     
 end
 
 
@@ -748,7 +659,7 @@ function layer_forward!(layer::LinearLayer, x::Matrix{Float64}, batch_size)
     layer.a_below = x   # assign alias for using in backprop
     # activation
     layer.activationf(layer, layer.adj)
-    return     # nothing
+    return     
 end
 
 function layer_backward!(layer::LinearLayer, layer_next::LinearLayer, n_samples; output=false)
