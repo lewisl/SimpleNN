@@ -23,12 +23,14 @@ export
     preptrain,
     allocate_layers, 
     setup_preds,
+    predict,
     train_loop!,
     predict,
     display_mnist_digit,
     weights2file,
     file2weights,
     show_all_array_sizes
+
 
 using Random
 using LinearAlgebra

@@ -10,7 +10,7 @@ I'll include an explanation and optimized Julia code for calculating the weight 
 
 where $a_{\text{below}}$ is the activation from the previous layer (the conv input), $\epsilon$ is the loss gradient at the output of this layer, $B$ is the batch size, and $H_{\text{out}}\times W_{\text{out}}$ is the spatial size of the **output** (feature map) for this conv layer. This formula is exactly the cross-correlation of the input with the error signal ([Convolutional Neural Networks · Knet.jl](https://denizyuret.github.io/Knet.jl/latest/cnn/#:~:text=,ldots)), averaged over the batch. Intuitively, we slide the **error map** over the input activation; at each alignment, the product of overlapping terms contributes to the corresponding weight’s gradient.
 
-**Handling No-Padding and Alignment:** In the forward pass, using **valid convolution (no padding)** means the output spatial dimensions are reduced (e.g. if input is 5×5 and filter 3×3, output is 3×3). In backpropagation, **padding is needed when computing the gradient w.r.t. the input**, so that the error is applied to all input positions it originally influenced ([Convolutional Neural Networks · Knet.jl](https://denizyuret.github.io/Knet.jl/latest/cnn/#:~:text=Here%20is%20the%20gradient%20for,the%20input)). However, for the **weight gradients**, we do not explicitly pad the input or error – we only need to ensure correct alignment of the input patches with the output error. The summation indices in the formula above take care of this alignment: for each output position $(i,j)$, the term $a_{\text{below}}[i+f_i-1,\; j+f_j-1]$ picks out the input value that was multiplied by the weight $W[f_i,f_j]$ to produce that output. This naturally covers all valid positions where the filter overlapped the input, and excludes positions outside the original input bounds (no padding needed for computing `grad_weight`). In practice, you iterate `i` from $1$ to $H_{\text{out}}$ and `j` from $1$ to $W_{\text{out}}`, so that `i+f_i-1` and `j+f_j-1` never exceed the input dimensions.
+**Handling No-Padding and Alignment:** In the forward pass, using **valid convolution (no padding)** means the output spatial dimensions are reduced (e.g. if input is 5×5 and filter 3×3, output is 3×3). In backpropagation, **padding is needed when computing the gradient w.r.t. the input**, so that the error is applied to all input positions it originally influenced ([Convolutional Neural Networks · Knet.jl](https://denizyuret.github.io/Knet.jl/latest/cnn/#:~:text=Here%20is%20the%20gradient%20for,the%20input)). However, for the **weight gradients**, we do not explicitly pad the input or error – we only need to ensure correct alignment of the input patches with the output error. The summation indices in the formula above take care of this alignment: for each output position $(i,j)$, the term $a_{\text{below}}[i+f_i-1,\; j+f_j-1]$ picks out the input value that was multiplied by the weight $W[f_i,f_j]$ to produce that output. This naturally covers all valid positions where the filter overlapped the input, and excludes positions outside the original input bounds (no padding needed for computing `grad_weight`). In practice, you iterate `i` from $1$ to $H_{\text{out}}$ and `j` from $1$ to $W_{\text{out}}$, so that `i+f_i-1` and `j+f_j-1` never exceed the input dimensions.
 
 **Multi-Channel and Channel Mismatch:** Each conv filter spans **all input channels** and produces one output channel ([python 3.x - Interpretation of in_channels and out_channels in Conv2D in Pytorch Convolution Neural Networks (CNN) - Stack Overflow](https://stackoverflow.com/questions/61116355/interpretation-of-in-channels-and-out-channels-in-conv2d-in-pytorch-convolution#:~:text=In%20that%20case%20you%20have,input%20feature%20map%20and%20summing)) ([python 3.x - Interpretation of in_channels and out_channels in Conv2D in Pytorch Convolution Neural Networks (CNN) - Stack Overflow](https://stackoverflow.com/questions/61116355/interpretation-of-in-channels-and-out-channels-in-conv2d-in-pytorch-convolution#:~:text=Edit%3A%20Think%20of%20it%20in,times%20to%20get%2012%20Channels)). If the layer has `in_channels` and `out_channels`, then the weight tensor is shaped `[f_h, f_w, in_channels, out_channels]`. The gradient calculation must account for every input channel contributing to each output channel’s error. The solution is to accumulate (sum) over the input channels when computing a given output filter’s gradients. In the formula above, notice we sum over `ic` (input channel index) for each `oc`. This means for each output channel’s filter, we compute separate gradients for each slice `[fi,fj,ic,oc]` and add them up. **Channel mismatch** (different number of in/out channels) is handled by indexing the corresponding slices correctly – e.g. multiply activation from channel `ic` with error from channel `oc` when accumulating into `grad_weight[:, :, ic, oc]`. There’s no direct broadcasting needed; you simply loop (or vectorize) over `ic` and `oc` to cover all pairs.
 
@@ -67,7 +67,113 @@ end
 
 **Why this is correct:** The double slice `[fi:fi+H_out-1, \; fj:fj+W_out-1]` on the input selects exactly the region that each 3×3 filter position `(fi,fj)` multiplies with the error map. By multiplying this `local_patch` with the error `err` (elementwise) and summing, we effectively perform the $\sum_{i,j,b}$ accumulation in one go. This is equivalent to the nested-loop definition but leverages Julia's optimized array operations. The use of `@inbounds` and looping in natural memory order (batch is last dimension) helps performance by avoiding bounds-checking and improving cache coherence. If further optimization is needed, one could consider multi-threading the outer loops (since different `oc` or `ic` iterations are independent) or using **LoopVectorization.jl** for automatic SIMD. But even as written, this implementation is efficient and clear.
 
-**Verification of Dimensions:** By not padding during weight gradient calculation, we ensure the spatial alignment is consistent with the forward pass. The input slice `fi:fi+H_out-1` works because `H_out = H_{\text{in}} - f_h + 1` (for stride 1, no padding). For example, if `H_in=5` and `f_h=3`, then `H_out=3`. For `fi=3` (bottom of the filter), the slice is `3 : 3+3-1 = 3:5` – the bottom 3 rows of the input – which correctly aligns with `eps_l[1:3, :]` (the full height of the error map). This holds for all `fi, fj` in `1:3`. Similarly, looping over each `ic` and `oc` ensures we accumulate contributions for every filter weight across all channels. The result `layer.grad_weight` will have the same shape as the weight tensor (3×3×in_channels×out_channels), containing the computed gradients.
+**Verification of Dimensions:** By not padding during weight gradient calculation, we ensure the spatial alignment is consistent with the forward pass. The input slice `fi:fi+H_out-1` works because H_out = $H_{\text{in}}$ - f_h + 1 (for stride 1, no padding). For example, if `H_in=5` and `f_h=3`, then `H_out=3`. For `fi=3` (bottom of the filter), the slice is `3 : 3+3-1 = 3:5` – the bottom 3 rows of the input – which correctly aligns with `eps_l[1:3, :]` (the full height of the error map). This holds for all `fi, fj` in `1:3`. Similarly, looping over each `ic` and `oc` ensures we accumulate contributions for every filter weight across all channels. The result `layer.grad_weight` will have the same shape as the weight tensor (3×3×in_channels×out_channels), containing the computed gradients.
+
+**Note: Must use padding*** during backpropagation of the gradient of the weighty when using "same" padding
+Great question—Julia offers a few solid tools for profiling memory allocations and performance. Since your setup is a custom training loop with mostly preallocated arrays, your goal is probably to:
+
+1. **Confirm allocations are minimized or eliminated across batches/epochs**
+2. **Time the training loop or subroutines (e.g., feedforward, backprop)**
+3. **Find any hidden allocations or slow spots**
+
+Here are the best tools and techniques:
+
+---
+
+### ✅ **1. `@time` and `@elapsed`**
+Good for quick checks:
+
+```julia
+@time train_loop(...)
+```
+
+Or inside the loop:
+
+```julia
+@time probs = feedforward!(layers, x_train_part, n_samples)
+```
+
+But `@time` includes compilation time on first run—wrap in a function and run once before timing.
+
+---
+
+### ✅ **2. `@allocated`**
+Reports number of bytes allocated (useful for verifying that your loops allocate nothing):
+
+```julia
+@allocated feedforward!(layers, x_train_part, n_samples)
+```
+
+You can compare allocations with and without certain features (like batch norm or layer updates).
+
+---
+
+### ✅ **3. `@btime` from BenchmarkTools.jl** *(Highly Recommended)*
+Way more accurate. Ignores compilation, runs many times for statistical results, and measures time + allocations.
+
+Install:
+```julia
+using BenchmarkTools
+```
+
+Example:
+```julia
+@btime feedforward!($layers, $x_train_part, $n_samples)
+```
+
+> Use `$` to interpolate variables to avoid benchmarking their lookup.
+
+You can also benchmark an entire epoch:
+```julia
+@btime train_loop(; x_train=$x_train, y_train=$y_train, batch_size=10000, epochs=1, minibatch_size=50, lr=0.01)
+```
+
+---
+
+### ✅ **4. `@profile` for flamegraph-style analysis**
+This is more advanced, if you want to dive into hotspots or expensive calls:
+
+```julia
+using Profile
+@profile train_loop(...)
+```
+
+Then visualize with:
+```julia
+using ProfileView
+ProfileView.view()
+```
+
+---
+
+### 🔍 **Tracking GC activity**
+Sometimes GC overhead shows hidden allocations. You can inspect GC stats like this:
+```julia
+GC.gc()
+before = GC.num()
+train_loop(...)
+after = GC.num()
+println("GC calls: ", after - before)
+```
+
+---
+
+### 🧼 Pro tip: Add these inside loops
+You can track cumulative timing and allocation during epochs:
+```julia
+total_alloc = 0
+@time begin
+    for epoch in 1:epochs
+        epoch_alloc = @allocated train_epoch!(...)
+        total_alloc += epoch_alloc
+    end
+end
+println("Total alloc: $total_alloc bytes")
+```
+
+---
+
+Let me know if you want to wrap this into a reusable macro or logging system. Would be easy to integrate with your current training loop.
 
 **Conclusion:** By interpreting the weight gradient as a convolution (cross-correlation) operation and using Julia’s array operations, we avoid deep nested loops and handle padding and channel alignment implicitly through slicing. The above implementation is both **clear** (mirroring the mathematical formula) and **optimized** for performance in pure Julia, and it correctly computes the convolutional weight gradients for backpropagation. 
 
