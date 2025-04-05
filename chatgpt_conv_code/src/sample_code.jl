@@ -508,7 +508,7 @@ function layer_forward!(layer::ConvLayer, x::AbstractArray{Float64,4}, batch_siz
     # activation
     layer.activationf(layer, layer.adj)
 
-    return     # nothing
+    return
 end
 
 
@@ -560,7 +560,7 @@ function layer_backward!(layer::ConvLayer, layer_next, n_samples)
 
     # Compute bias gradients
     for oc = axes(layer.eps_l, 3) # the channels axis
-        layer.grad_bias[oc] = sum(layer.eps_l[:,:,oc,:]) .* (1.0 / Float64(n_samples))
+        @views layer.grad_bias[oc] = sum(layer.eps_l[:,:,oc,:]) .* (1.0 / Float64(n_samples))
     end
 
     return     # nothing
@@ -573,7 +573,7 @@ function compute_grad_weight!(layer, n_samples)
     fill!(layer.grad_weight, 0.0) # no allocations; faster than assignment
     if layer.padrule == :same
         fill!(layer.pad_a_below, 0.0)
-        layer.pad_a_below[2:end-1, 2:end-1, :, :] .= layer.a_below
+        @views layer.pad_a_below[2:end-1, 2:end-1, :, :] .= layer.a_below
     else
         layer.pad_a_below = layer.a_below  # set alias to a_below to use in loop below.  no allocation
     end
@@ -631,7 +631,7 @@ function layer_forward!(layer::MaxPoolLayer, x::Array{Float64,4}, n_samples)
             end
         end
     end
-    return  # nothing
+    return 
 end
 
 
@@ -657,8 +657,10 @@ end
 
 
 function layer_forward!(layer::FlattenLayer, x::Array{Float64, 4}, batch_size) 
-    layer.a .= reshape(x,:,batch_size)  
-    return     # nothing
+    @inbounds for idx in axes(x, 4)  # iterate over batch dimension (4th dimension)
+            @views layer.a[:, idx] .= x[:, :, :, idx][:]  # Flatten the first 3 dimensions and assign to `layer.a`
+        end
+    return
 end
 
 
@@ -668,19 +670,19 @@ function layer_backward!(layer::FlattenLayer, layer_next::LinearLayer, batch_siz
     # Reshape in-place using views
     h, w, ch, _ = size(layer.eps_l)
     @inbounds for i in 1:batch_size
-        layer.eps_l[:,:,:,i] .= reshape(@view(layer.dl_dflat[:,i]), h, w, ch)
+        @views layer.eps_l[:,:,:,i] .= reshape(layer.dl_dflat[:,i], h, w, ch)
     end
     return     
 end
 
 
 function layer_forward!(layer::LinearLayer, x::Matrix{Float64}, batch_size)
+
     mul!(layer.z, layer.weight, x)  # in-place matrix multiplication
     layer.z .+= layer.bias  # in-place addition with broadcasting
     layer.a_below = x   # assign alias for using in backprop
-    # activation
     layer.activationf(layer, layer.adj)
-    return     
+    return 
 end
 
 function layer_backward!(layer::LinearLayer, layer_next::LinearLayer, n_samples; output=false)
@@ -715,7 +717,16 @@ end
 
 
 function relu!(layer, adj)
-    @fastmath layer.a .= max.(layer.z, adj)
+    @inbounds @fastmath begin
+        for i in eachindex(layer.z)
+            # Directly compare and assign, avoiding any temporary allocations
+            if layer.z[i] > adj
+                layer.a[i] = layer.z[i]
+            else
+                layer.a[i] = adj
+            end
+        end
+    end
 end
 
 # use for activation of conv or linear, when activation is requested as :none
@@ -728,7 +739,6 @@ function relu_grad!(grad, z, adj)   # I suppose this is really leaky_relu...
     end
 end
 
-# no allocations here, mom!
 function softmax!(layer, adj=0.0) # adj arg required for calling loop: not used
     for c in axes(layer.z,2)
         va = view(layer.a, :, c)
@@ -738,6 +748,7 @@ function softmax!(layer, adj=0.0) # adj arg required for calling loop: not used
     end
     return 
 end
+
 
 
 function accuracy(preds, targets)  # this is NOT very general
@@ -779,12 +790,13 @@ end
 
 function feedforward!(layers, x_train, n_samples)
     layers[begin].a = x_train
-    @inbounds for (i,lr) in enumerate(layers[2:end])  # assumes that layers[1] MUST be input layer without checking!
+    @inbounds @views for (i,lr) in enumerate(layers[2:end])  # assumes that layers[1] MUST be input layer without checking!
         i += 1  # skip index of layer 1
         # dispatch on type of lr
         # activation function is part of the layer definition
         layer_forward!(lr, layers[i-1].a, n_samples) 
     end
+    return 
 end
 
 function backprop!(layers, y_train, n_samples)
@@ -793,7 +805,7 @@ function backprop!(layers, y_train, n_samples)
     layer_backward!(layers[end],layers[end-1], n_samples; output=true)
 
     # skip over output layer (end) and input layer (begin)
-    @inbounds for (j, lr) in enumerate(reverse(layers[begin+1:end-1])); 
+    @inbounds @views for (j, lr) in enumerate(reverse(layers[begin+1:end-1])); 
         i = length(layers) - j; 
         layer_backward!(lr, layers[i+1], n_samples)
     end
@@ -806,7 +818,7 @@ function weight_update!(layer, lr)
 end
 
 function update_weight_loop!(layers, lambda)
-    for lr in layers[begin+1:end]
+    @views for lr in layers[begin+1:end]
         if (typeof(lr) == FlattenLayer) | (typeof(lr) == MaxPoolLayer)
             continue  # redundant but obvious
         end
@@ -865,6 +877,7 @@ function train_loop!(layers; x_train, y_train, batch_size, epochs, minibatch_siz
 
         end
     end
+    
     return stats
 end
 
@@ -923,6 +936,50 @@ function plot_training(stats)
     plot(stats.acc, label="Accuracy", color=:blue, ylabel="Accuracy")  
     plot!(twinx(), stats.loss, label="Cost", ylabel="Loss",color=:red)
 end
+
+function flatloop(arr1)
+    flatdim = size(arr1,1)*size(arr1,2)*size(arr1,3)
+    ret = zeros(flatdim,size(arr1,4))
+    innerdim=0;outerdim = 0;
+    for b in axes(arr1,4)
+        outerdim += 1; innerdim=0
+        for c in axes(arr1,3)
+            for j in axes(arr1,2)
+                for i in axes(arr1,1)
+                    innerdim += 1
+                    ret[innerdim, outerdim] = arr1[i,j,c,b]
+                end
+            end
+        end
+    end
+    return ret
+end
+
+function flatloop!(arrout, arrin)
+    innerdim=0;outerdim = 0;
+    for b in axes(arrin,4)
+        outerdim += 1; innerdim=0
+        for c in axes(arrin,3)
+            for j in axes(arrin,2)
+                for i in axes(arrin,1)
+                    innerdim += 1
+                    arrout[innerdim, outerdim] = arrin[i,j,c,b]
+                end
+            end
+        end
+    end
+    return
+end
+
+function flattenview!(arrout, arrin)
+    @views begin
+        # Flatten the first 3 dimensions of `x` into `layer.a`
+        for idx in axes(arrin, 4)  # iterate over batch dimension (4th dimension)
+            arrout[:, idx] .= arrin[:, :, :, idx][:]  # Flatten the first 3 dimensions and assign to `layer.a`
+        end
+    end
+end
+
 
 # ============================
 # Save and load weights to/from files

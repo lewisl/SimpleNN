@@ -12,12 +12,13 @@ lr=0.06
 
 ## 
 
-layerspecs, layers, x_train, y_train = preptrain(modelspec, sample_size, minibatch_size);
+
+@time layerspecs, layers, x_train, y_train = preptrain(modelspec, sample_size, minibatch_size);
 
 
 ##
 
-stats = train_loop!(layers; x_train=x_train, y_train=y_train, batch_size = sample_size, epochs=epochs, minibatch_size=minibatch_size, lr=lr);
+@time stats = train_loop!(layers; x_train=x_train, y_train=y_train, batch_size = sample_size, epochs=epochs, minibatch_size=minibatch_size, lr=lr);
 
 
 ##
