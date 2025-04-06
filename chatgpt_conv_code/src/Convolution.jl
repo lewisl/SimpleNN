@@ -40,5 +40,6 @@ using MLDatasets
 using StatsBase
 using Statistics
 using LinearAlgebra
+using BenchmarkTools
 
 end  # module ConvLayer

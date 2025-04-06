@@ -2,6 +2,8 @@
 TODO
 - test ConvLayer with no padding
 - why don't we do implicit flatten when conv precedes linear?
+- best way to set input layer type: flat or image
+- look for allocations in layer_backward(::ConvLayer)
 
 - pre-allocate output layer for softmax
 =#
@@ -12,6 +14,7 @@ using Colors, Plots
 using Serialization
 using MLDatasets
 using StatsBase
+using BenchmarkTools
 
 
 # ============================
@@ -82,19 +85,19 @@ big_conv = LayerSpec[
     LayerSpec(h=10, kind=:linear,activation=:softmax, name=:output)
     ]
 
-small_conv = LayerSpec[
+two_conv = LayerSpec[
         LayerSpec(name=:input, h=28, w=28, outch=1, kind=:input, )
-        convlayerspec(name=:conv1, outch=32, f_h=3, f_w=3, activation=:relu, adj=0.0)
+        convlayerspec(name=:conv1, outch=24, f_h=3, f_w=3, activation=:relu, adj=0.0)
         maxpoollayerspec(name=:maxpool1, f_h=2, f_w=2)
-        # convlayerspec(name=:conv2, outch=48, f_h=3, f_w=3, activation=:relu, adj=0.0)
-        # maxpoollayerspec(name=:maxpool2, f_h=2, f_w=2)
+        convlayerspec(name=:conv2, outch=48, f_h=3, f_w=3, activation=:relu, adj=0.0)
+        maxpoollayerspec(name=:maxpool2, f_h=2, f_w=2)
         flattenlayerspec(name=:flatten)
         linearlayerspec(name=:linear1, output=128, adj=0.0)
-        # linearlayerspec(name=:linear2, output=64, adj=0.0)
+        linearlayerspec(name=:linear2, output=64, adj=0.0)
         LayerSpec(name=:output, h=10, kind=:linear, activation=:softmax, )
         ]
 
-little_conv = LayerSpec[
+one_conv = LayerSpec[
         LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
         convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, adj=0.0)
         LayerSpec(f_h=2, f_w=2, kind=:maxpool, name=:maxpool2)
@@ -111,7 +114,6 @@ two_linear = LayerSpec[
     linearlayerspec(name=:linear2, output=200, adj=0.01)
     LayerSpec(h=10, kind=:linear, name=:output, activation=:softmax)
     ]
-
 
 
 # method to pass a function
@@ -171,7 +173,7 @@ Base.@kwdef mutable struct ConvLayer
     grad_bias::Vector{Float64} = Float64[]
 end
 
-# method to do prep calculations based on LayerSpec inputs, then create a LinearLayer
+# method to do prep calculations based on LayerSpec inputs, then create a ConvLayer
 function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
     outch = lr.outch
     prev_h, prev_w, inch, _ = size(prevlayer.a)
@@ -485,8 +487,12 @@ end
 function layer_forward!(layer::ConvLayer, x::AbstractArray{Float64,4}, batch_size)
     layer.a_below = x   # as an alias, this might not work for backprop though it seems to
 
+    fill!(layer.z, 0.0)
+
     if layer.padrule == :same  # we know padding = 1 for :same
         @views layer.pad_x[begin+1:end-1, begin+1:end-1, :, :] .= x 
+    else
+        layer.pad_x .= x
     end
 
     @inbounds for b in axes(layer.z, 4)
@@ -496,15 +502,16 @@ function layer_forward!(layer::ConvLayer, x::AbstractArray{Float64,4}, batch_siz
                     for ic in axes(layer.weight, 3)
                         for fw in axes(layer.weight, 2)
                             for fh in axes(layer.weight, 1)
-                                layer.z[i,j,oc, b] = (layer.pad_x[i+fh-1, j+fw-1, ic, b] 
-                                    * layer.weight[fh,fw,ic,oc] + layer.bias[oc])
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
+                                layer.z[i,j,oc, b] += (layer.pad_x[i+fh-1, j+fw-1, ic, b] 
+                                    * layer.weight[fh,fw,ic,oc])
+                            end  # columns of filter
+                        end  # rows of filter
+                    end  # input channels
+                layer.z[i,j,oc, b] += layer.bias[oc]
+                end  # output column pixels
+            end   # output row pixels
+        end  # output channels
+    end   # each sample in the minibatch or training set
     # activation
     layer.activationf(layer, layer.adj)
 
@@ -677,9 +684,16 @@ end
 
 
 function layer_forward!(layer::LinearLayer, x::Matrix{Float64}, batch_size)
-
     mul!(layer.z, layer.weight, x)  # in-place matrix multiplication
     layer.z .+= layer.bias  # in-place addition with broadcasting
+
+    # Replace broadcasting with explicit loop
+    # for j in axes(layer.z, 2)  # For each column (sample)
+    #     for i in axes(layer.z, 1)  # For each row (output neuron)
+    #         layer.z[i, j] += layer.bias[i]
+    #     end
+    # end
+
     layer.a_below = x   # assign alias for using in backprop
     layer.activationf(layer, layer.adj)
     return 
@@ -739,6 +753,7 @@ function relu_grad!(grad, z, adj)   # I suppose this is really leaky_relu...
     end
 end
 
+# tested to have no allocations
 function softmax!(layer, adj=0.0) # adj arg required for calling loop: not used
     for c in axes(layer.z,2)
         va = view(layer.a, :, c)
@@ -749,38 +764,97 @@ function softmax!(layer, adj=0.0) # adj arg required for calling loop: not used
     return 
 end
 
+# function accuracy(preds, targets)  # this is NOT very general
+#     if size(targets,1) > 1
+#         # targetmax = ind2sub(size(targets),vec(findmax(targets,1)[2]))[1]
+#         # predmax = ind2sub(size(preds),vec(findmax(preds,1)[2]))[1]
+#         targetmax = getvalidx(targets)     # vec(map(x -> x[1], argmax(targets,dims=1)));
+#         predmax =   getvalidx(preds)       # vec(map(x -> x[1], argmax(preds,dims=1)));
+#         fracright = mean(targetmax .== predmax)
+#     else
+#         # works because single output unit is classification probability
+#         # choices = [j > 0.5 ? 1.0 : 0.0 for j in preds]
+#         choices = zeros(size(preds))
+#         for i = eachindex(choices)
+#             choices[i] = preds[i] > 0.5 ? 1.0 : 0.0
+#         end
+#         fracright = mean(choices .== targets)
+#     end
+#     return fracright
+# end
 
 
-function accuracy(preds, targets)  # this is NOT very general
-    if size(targets,1) > 1
-        # targetmax = ind2sub(size(targets),vec(findmax(targets,1)[2]))[1]
-        # predmax = ind2sub(size(preds),vec(findmax(preds,1)[2]))[1]
-        targetmax = getvalidx(targets)     # vec(map(x -> x[1], argmax(targets,dims=1)));
-        predmax =   getvalidx(preds)       # vec(map(x -> x[1], argmax(preds,dims=1)));
-        fracright = mean(targetmax .== predmax)
-    else
-        # works because single output unit is classification probability
-        # choices = [j > 0.5 ? 1.0 : 0.0 for j in preds]
-        choices = zeros(size(preds))
-        for i = eachindex(choices)
-            choices[i] = preds[i] > 0.5 ? 1.0 : 0.0
+function accuracy(preds, targets)
+    # non-allocating version of accuracy without using argmax
+    if size(targets, 1) > 1
+        # Multi-class classification
+        correct_count = 0
+        total_samples = size(preds, 2)  # Assuming column-major layout (samples in columns)
+        
+        @inbounds for sample in 1:total_samples
+            # Find max index in target for this sample
+            target_max_idx = 1
+            target_max_val = targets[1, sample]
+            @inbounds for i in (first(axes(targets,1))+1):last(axes(targets,1))
+                if targets[i, sample] > target_max_val
+                    target_max_val = targets[i, sample]
+                    target_max_idx = i
+                end
+            end
+            
+            # Find max index in prediction for this sample
+            pred_max_idx = 1
+            pred_max_val = preds[1, sample]
+            @inbounds for i in (first(axes(preds, 1))+1):last(axes(preds, 1))
+                if preds[i, sample] > pred_max_val
+                    pred_max_val = preds[i, sample]
+                    pred_max_idx = i
+                end
+            end
+            
+            # Increment if they match
+            if pred_max_idx == target_max_idx
+                correct_count += 1
+            end
         end
-        fracright = mean(choices .== targets)
+        
+        return correct_count / total_samples
+    else
+        # Binary classification
+        correct_count = 0
+        total_samples = length(preds)
+        
+        for i in eachindex(preds)
+            is_correct = (preds[i] > 0.5) == (targets[i] > 0.5)
+            correct_count += is_correct ? 1 : 0
+        end
+        
+        return correct_count / total_samples
     end
-    return fracright
 end
-
 
 function getvalidx(arr, argfunc=argmax)  # could also be argmin
     return vec(map(x -> x[1], argfunc(arr, dims=1)))
 end
 
+
 function cross_entropy_loss(pred::AbstractMatrix{Float64}, target::AbstractMatrix{Float64}, n_samples)
-    # target is one-hot encoded
-    # return -sum(target .* log.(pred .+ 1e-9))
+    # this may not be obvious, but it is a non-allocating version
     n = n_samples
-    cost = (-1.0 / n) * (dot(target,log.(max.(pred, 1e-20))) +
-        dot((1.0 .- target), log.(max.(1.0 .- pred, 1e-20))))
+    log_sum1 = 0.0
+    log_sum2 = 0.0
+    
+    @inbounds for i in eachindex(pred)
+        # First term: target * log(max(pred, 1e-20))
+        pred_val = max(pred[i], 1e-20)
+        log_sum1 += target[i] * log(pred_val)
+        
+        # Second term: (1-target) * log(max(1-pred, 1e-20))
+        inv_pred = max(1.0 - pred[i], 1e-20)
+        log_sum2 += (1.0 - target[i]) * log(inv_pred)
+    end
+    
+    return (-1.0 / n) * (log_sum1 + log_sum2)
 end
 
 
@@ -790,11 +864,12 @@ end
 
 function feedforward!(layers, x_train, n_samples)
     layers[begin].a = x_train
-    @inbounds @views for (i,lr) in enumerate(layers[2:end])  # assumes that layers[1] MUST be input layer without checking!
+    @inbounds for (i,lr) in enumerate(layers[2:end])  # assumes that layers[1] MUST be input layer without checking!
         i += 1  # skip index of layer 1
         # dispatch on type of lr
         # activation function is part of the layer definition
-        layer_forward!(lr, layers[i-1].a, n_samples) 
+        # @show typeof(lr)
+        layer_forward!(lr, (layers[i-1].a), n_samples) 
     end
     return 
 end
@@ -806,15 +881,23 @@ function backprop!(layers, y_train, n_samples)
 
     # skip over output layer (end) and input layer (begin)
     @inbounds @views for (j, lr) in enumerate(reverse(layers[begin+1:end-1])); 
-        i = length(layers) - j; 
+        i = length(layers) - j
         layer_backward!(lr, layers[i+1], n_samples)
     end
     return
 end
 
 function weight_update!(layer, lr)
-    layer.weight .-= lr .* layer.grad_weight
-    layer.bias .-= lr .* layer.grad_bias
+    # use explicit loop to eliminate allocation and allow optimization
+    @inbounds for i in eachindex(layer.weight)
+        layer.weight[i] -= lr * layer.grad_weight[i]
+    end
+    
+    # Separate loop for bias
+    @inbounds for i in eachindex(layer.bias)
+        layer.bias[i] -= lr * layer.grad_bias[i]
+    end
+
 end
 
 function update_weight_loop!(layers, lambda)
@@ -883,8 +966,8 @@ end
 
 
 function gather_stats!(stat_series, layers,  y_train, counter, batno, epoch; to_console=true, to_series=true)
-    loss_val = cross_entropy_loss(layers[end].a, y_train, stat_series.minibatch_size)
-    acc = accuracy(layers[end].a, y_train)
+    loss_val = cross_entropy_loss((layers[end].a), y_train, (stat_series.minibatch_size))
+    acc = accuracy((layers[end].a), y_train)
     if to_series
         stat_series.loss[counter] = loss_val
         stat_series.acc[counter] = acc
@@ -937,6 +1020,35 @@ function plot_training(stats)
     plot!(twinx(), stats.loss, label="Cost", ylabel="Loss",color=:red)
 end
 
+
+# ============================
+# Save and load weights to/from files
+# ============================
+
+function weights2file(layers, suffix, pathstr)
+    for lr in fieldnames(typeof(layers))
+        serialize(joinpath(pathstr,string(lr)*"_bias"*'_'*suffix*".dat"), 
+                            eval(getfield(layers,lr)).bias)
+        serialize(joinpath(pathstr, string(lr)*"_weight"*'_'*suffix*".dat"), 
+                            eval(getfield(layers,lr)).weight)
+    end
+end
+
+function file2weights(suffix, pathstr)
+    outlayers = init_layers(n_samples=batch_size)
+    for lr in fieldnames(typeof(outlayers))
+        fname_bias = joinpath(pathstr,string(lr)*"_bias"*'_'*suffix*".dat")
+        fname_weight = joinpath(pathstr, string(lr)*"_weight"*'_'*suffix*".dat")
+        setfield!(getfield(layers, lr), :bias, deserialize(fname_bias))
+        setfield!(getfield(layers, lr), :weight, deserialize(fname_weight))
+    end
+    return outlayers
+end
+
+# ============================
+# Functions for performance and memory testing
+# ============================
+
 function flatloop(arr1)
     flatdim = size(arr1,1)*size(arr1,2)*size(arr1,3)
     ret = zeros(flatdim,size(arr1,4))
@@ -980,27 +1092,12 @@ function flattenview!(arrout, arrin)
     end
 end
 
-
-# ============================
-# Save and load weights to/from files
-# ============================
-
-function weights2file(layers, suffix, pathstr)
-    for lr in fieldnames(typeof(layers))
-        serialize(joinpath(pathstr,string(lr)*"_bias"*'_'*suffix*".dat"), 
-                            eval(getfield(layers,lr)).bias)
-        serialize(joinpath(pathstr, string(lr)*"_weight"*'_'*suffix*".dat"), 
-                            eval(getfield(layers,lr)).weight)
+function softmax!(a::Array{Float64, 2}, z::Array{Float64, 2})
+    for c in axes(z, 2) # columns = samples
+        va = view(a, :, c)
+        vz = view(z, :, c)
+        va .= exp.(vz .- maximum(vz))
+        va .= va ./ (sum(va) .+ 1e-12)
     end
-end
-
-function file2weights(suffix, pathstr)
-    outlayers = init_layers(n_samples=batch_size)
-    for lr in fieldnames(typeof(outlayers))
-        fname_bias = joinpath(pathstr,string(lr)*"_bias"*'_'*suffix*".dat")
-        fname_weight = joinpath(pathstr, string(lr)*"_weight"*'_'*suffix*".dat")
-        setfield!(getfield(layers, lr), :bias, deserialize(fname_bias))
-        setfield!(getfield(layers, lr), :weight, deserialize(fname_weight))
-    end
-    return outlayers
+    return
 end
