@@ -75,15 +75,6 @@ end
 # Sample model definitions or modelspecs
 # ============================
 
-big_conv = LayerSpec[
-    LayerSpec(h=28, w=28, outch=10, kind=:input, name=:input)
-    LayerSpec(h=26, w=26, outch=4, f_h=3, f_w=3, inch=1, kind=:conv, name=:conv1, activation=:relu, adj=0.002)
-    LayerSpec(h=24, w=24, outch=4, f_h=3, f_w=3, inch=4, kind=:conv, name=:conv2, activation=:relu, adj=0.002)
-    LayerSpec(h=24, w=24, outch=4, kind=:flatten, name=:flatten)
-    LayerSpec(h=500, kind=:linear, activation=:relu, name=:linear3, adj=0.002)
-    LayerSpec(h=100, kind=:linear, activation=:relu, name=:linear4, adj=0.002)
-    LayerSpec(h=10, kind=:linear,activation=:softmax, name=:output)
-    ]
 
 two_conv = LayerSpec[
         LayerSpec(name=:input, h=28, w=28, outch=1, kind=:input, )
@@ -97,24 +88,33 @@ two_conv = LayerSpec[
         LayerSpec(name=:output, h=10, kind=:linear, activation=:softmax, )
         ]
 
+# 64 channels is not great
 one_conv = LayerSpec[
         LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
         convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, adj=0.0)
-        LayerSpec(f_h=2, f_w=2, kind=:maxpool, name=:maxpool2)
+        maxpoollayerspec(name=:maxpool1, f_h=2, f_w=2)
         LayerSpec(kind=:flatten, name=:flatten)
-        LayerSpec(h=128, kind=:linear, activation=:relu, name=:linear1, adj=0.0)
-        LayerSpec(h=64, kind=:linear, activation=:relu, name=:linear2, adj=0.0)
+        LayerSpec(h=200, kind=:linear, activation=:relu, name=:linear1, adj=0.0)
+        # LayerSpec(h=100, kind=:linear, activation=:relu, name=:linear2, adj=0.0)
         LayerSpec(h=10, kind=:linear, activation=:softmax, name=:output)
         ]
 
 two_linear = LayerSpec[
     LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
     flattenlayerspec(name=:flatten)
-    linearlayerspec(name=:linear1, output=200, adj=0.01)
-    linearlayerspec(name=:linear2, output=200, adj=0.01)
+    linearlayerspec(name=:linear1, output=256, adj=0.01)
+    linearlayerspec(name=:linear2, output=256, adj=0.01)
     LayerSpec(h=10, kind=:linear, name=:output, activation=:softmax)
     ]
 
+three_linear = LayerSpec[
+    LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
+    flattenlayerspec(name=:flatten)
+    linearlayerspec(name=:linear1, output=256, adj=0.01)
+    linearlayerspec(name=:linear1, output=256, adj=0.01)
+    linearlayerspec(name=:linear2, output=256, adj=0.01)
+    LayerSpec(h=10, kind=:linear, name=:output, activation=:softmax)
+    ]
 
 # method to pass a function
 function preptrain(modelspecs::Function, batch_size, minibatch_size)
@@ -123,12 +123,10 @@ function preptrain(modelspecs::Function, batch_size, minibatch_size)
 end
 
 # method to pass a vector
-function preptrain(layerspecs::Vector{LayerSpec}, batch_size, minibatch_size)
+function preptrain(layerspecs::Vector{LayerSpec}, batch_size, minibatch_size; preptest=false)
     trainset = MNIST(:train)
     testset = MNIST(:test)
 
-    # batch_size = 10000
-    # minibatch_size = 50
     x_train = trainset.features[1:28, 1:28,1:batch_size]
     x_train = Float64.(x_train)
     x_train = reshape(x_train, 28, 28, 1, batch_size)
@@ -136,6 +134,16 @@ function preptrain(layerspecs::Vector{LayerSpec}, batch_size, minibatch_size)
     y_train = trainset.targets[1:batch_size]
     y_train = indicatormat(y_train)
     y_train = Float64.(y_train)
+
+    preptest && begin
+        x_test = testset.features[1:28,1:28,:]
+        x_test = Float64.(x_test)
+        x_test = reshape(x_test, 28,28,1,:)
+
+        y_test = testset.targets
+        y_test = indicatormat(y_test)
+        y_test = Float64.(y_test)
+    end
 
     # shuffle the variables and outcome identically
     img_idx = shuffle(1:size(x_train,4))
@@ -145,7 +153,11 @@ function preptrain(layerspecs::Vector{LayerSpec}, batch_size, minibatch_size)
     layers = allocate_layers(layerspecs, minibatch_size);
     show_all_array_sizes(layers)
 
-    return layerspecs, layers, x_train_shuf, y_train_shuf
+    # preptest == false
+    preptest || return layerspecs, layers, x_train_shuf, y_train_shuf
+
+    # preptest == true
+    preptest && return layerspecs, layers, x_train_shuf, y_train_shuf, x_test, y_test
 end
 
 # ============================
@@ -512,6 +524,7 @@ function layer_forward!(layer::ConvLayer, x::AbstractArray{Float64,4}, batch_siz
             end   # output row pixels
         end  # output channels
     end   # each sample in the minibatch or training set
+
     # activation
     layer.activationf(layer, layer.adj)
 
@@ -723,8 +736,6 @@ function layer_backward!(layer::LinearLayer, layer_next::LinearLayer, n_samples;
 end
 
 
-# this can be used in a special position in the backprop! function and 
-# will dispatch properly because it's the only method with one input
 function dloss_dz!(layer, target)
     layer.eps_l .= layer.a .- target 
 end
@@ -824,7 +835,7 @@ function accuracy(preds, targets)
         correct_count = 0
         total_samples = length(preds)
         
-        for i in eachindex(preds)
+        @inbounds for i in eachindex(preds)
             is_correct = (preds[i] > 0.5) == (targets[i] > 0.5)
             correct_count += is_correct ? 1 : 0
         end
@@ -1002,8 +1013,6 @@ function display_mnist_digit(digit_data, dims=[])
         yside = dims[1]
     end
     plot(Gray.(transpose(reshape(digit_data,xside,yside))),  interpolation="nearest", showaxis=false) 
-    # println("Press enter to close image window..."); readline()
-    # close("all")        
 end
 
 function random_onehot(i,j)
@@ -1100,4 +1109,8 @@ function softmax!(a::Array{Float64, 2}, z::Array{Float64, 2})
         va .= va ./ (sum(va) .+ 1e-12)
     end
     return
+end
+
+function test_plot(s, e)
+    plot(s:e)
 end
