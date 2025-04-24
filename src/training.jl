@@ -5,11 +5,8 @@ TODO
 - best way to set input layer type: flat or image
 - best way to set output layer type: softmax, single, multi, regression?
 
-- add regression
+- test regression
 - add batch normalization
-- add regularization
-    - add reg term to cost
-    - add weight reg term to delta_weight
 
 - add ADAM optimization of learning
 
@@ -21,49 +18,41 @@ TODO
 # Setup training
 # ============================
 
+# method pre-declaration so we can use these functions as inputs to the struct. actual functions defined way below.
+function simple_update! end
+function reg_L1_update! end
+function reg_L2_update! end
 
-# method to pass a function
-function preptrain(modelspecs::Function, batch_size, minibatch_size)
-    layerspecs = modelspecs()
-    preptrain(layerspecs, batch_size, minibatch_size)
+Base.@kwdef mutable struct HyperParameters
+    lr::Float64 = 0.02          # learning rate
+    reg::Symbol = :none         # one of :none, :L1, :L2
+    regparm::Float64 = 0.01     # typically called lambda
+    weight_update_f!::Function = simple_update!
+    do_stats::Bool = true
+
+    function HyperParameters(lr::Float64, reg::Symbol, regparm::Float64, weight_update_f!::Function, do_stats::Bool)
+        if !in(reg, [:none, :L1, :L2])
+            error("reg must be one of :none, :L1, :l2. Input was :$reg")
+        end
+        if reg == :L1
+            weight_update_f! = reg_L1_update!
+        elseif reg == :L2
+            weight_update_f! = reg_L2_update!
+        end
+        new(lr, reg, regparm, weight_update_f!)
+    end
 end
 
-# method to pass a vector
-function preptrain(layerspecs::Vector{LayerSpec}, batch_size, minibatch_size; preptest=false)
-    trainset = MNIST(:train)
-    testset = MNIST(:test)
+default_hp = HyperParameters()     # to pass defaults into training_loop
 
-    x_train = trainset.features[1:28, 1:28, 1:batch_size]
-    x_train = Float64.(x_train)
-    x_train = reshape(x_train, 28, 28, 1, batch_size)
 
-    y_train = trainset.targets[1:batch_size]
-    y_train = indicatormat(y_train)
-    y_train = Float64.(y_train)
 
-    preptest && begin
-        x_test = testset.features[1:28, 1:28, :]
-        x_test = Float64.(x_test)
-        x_test = reshape(x_test, 28, 28, 1, :)
+function setup_train(layerspecs::Vector{LayerSpec}, batch_size)
 
-        y_test = testset.targets
-        y_test = indicatormat(y_test)
-        y_test = Float64.(y_test)
-    end
-
-    # shuffle the variables and outcome identically
-    img_idx = shuffle(1:size(x_train, 4))
-    x_train_shuf = x_train[:, :, :, img_idx]
-    y_train_shuf = y_train[:, img_idx]
-
-    layers = allocate_layers(layerspecs, minibatch_size)
+    layers = allocate_layers(layerspecs, batch_size)
     show_all_array_sizes(layers)
 
-    # preptest == false
-    preptest || return layerspecs, layers, x_train_shuf, y_train_shuf
-
-    # preptest == true
-    preptest && return layerspecs, layers, x_train_shuf, y_train_shuf, x_test, y_test
+    return layers
 end
 
 
@@ -147,7 +136,7 @@ function allocate_stats(batch_size, minibatch_size, epochs)
     no_of_batches = div(batch_size, minibatch_size)
     stats = stat_series(
         acc=zeros(no_of_batches * epochs),
-        loss=zeros(no_of_batches * epochs),
+        cost=zeros(no_of_batches * epochs),
         batch_size=batch_size,
         epochs=epochs,
         minibatch_size=minibatch_size)
@@ -157,11 +146,6 @@ end
 # ============================
 # Setup prediction
 # ============================
-
-function setup_preds(modelspecs::Function, layers, n_samples)
-    predlayerspecs = modelspecs()
-    setup_preds(predlayerspecs, layers, n_samples)
-end
 
 
 function setup_preds(predlayerspecs, layers, n_samples)
@@ -175,7 +159,18 @@ function setup_preds(predlayerspecs, layers, n_samples)
     return predlayers
 end
 
-
+# this is a faster way to do argmax
+function find_max_idx(arr::AbstractVector)
+    max_idx = 1
+    max_val = arr[1]
+    @inbounds for i in (first(axes(arr,1))+1):last(axes(arr,1))
+        if arr[i] > max_val
+            max_val = arr[i]
+            max_idx = i
+        end
+    end
+    return max_idx
+end
 
 function accuracy(preds, targets)
     # non-allocating version of accuracy without using argmax
@@ -185,27 +180,10 @@ function accuracy(preds, targets)
         total_samples = size(preds, 2)  # Assuming column-major layout (samples in columns)
 
         @inbounds for sample in 1:total_samples
-            # Find max index in target for this sample
-            target_max_idx = 1
-            target_max_val = targets[1, sample]
-            @inbounds for i in (first(axes(targets, 1))+1):last(axes(targets, 1))
-                if targets[i, sample] > target_max_val
-                    target_max_val = targets[i, sample]
-                    target_max_idx = i
-                end
-            end
+            @views target_max_idx = find_max_idx(targets[:,sample])
 
-            # Find max index in prediction for this sample
-            pred_max_idx = 1
-            pred_max_val = preds[1, sample]
-            @inbounds for i in (first(axes(preds, 1))+1):last(axes(preds, 1))
-                if preds[i, sample] > pred_max_val
-                    pred_max_val = preds[i, sample]
-                    pred_max_idx = i
-                end
-            end
+            @views pred_max_idx = find_max_idx(preds[:,sample])
 
-            # Increment if they match
             if pred_max_idx == target_max_idx
                 correct_count += 1
             end
@@ -226,18 +204,46 @@ function accuracy(preds, targets)
     end
 end
 
-function getvalidx(arr, argfunc=argmax)  # could also be argmin
-    return vec(map(x -> x[1], argfunc(arr, dims=1)))
+# ============================
+# cost
+# ============================
+
+
+function cross_entropy_cost(pred::AbstractMatrix{Float64}, target::AbstractMatrix{Float64}, n_samples)
+    # this may not be obvious, but it is a non-allocating version
+    n = n_samples
+    log_sum1 = 0.0
+    log_sum2 = 0.0
+
+    @inbounds for i in eachindex(pred)
+        # First term: target * log(max(pred, 1e-20))
+        pred_val = max(pred[i], 1e-20)
+        log_sum1 += target[i] * log(pred_val)
+
+        # Second term: (1-target) * log(max(1-pred, 1e-20))
+        inv_pred = max(1.0 - pred[i], 1e-20)
+        log_sum2 += (1.0 - target[i]) * log(inv_pred)
+    end
+
+    return (-1.0 / n) * (log_sum1 + log_sum2)
 end
 
 
+function mse_cost(targets, predictions, n, theta=[], lambda=1.0, reg="", output_layer=3)
+    @fastmath cost = (1.0 / (2.0 * n)) .* sum((targets .- predictions) .^ 2.0)
+    @fastmath if reg == "L2"  # set reg="" if not using regularization
+        regterm = lambda/(2.0 * n) .* sum([dot(th, th) for th in theta[2:output_layer]])
+        cost = cost + regterm
+    end
+    return cost
+end
 
 # ============================
 # Training Loop
 # ============================
 
-function feedforward!(layers, x_train, n_samples)
-    layers[begin].a = x_train
+function feedforward!(layers, x, n_samples)
+    layers[begin].a = x
     @inbounds for (i, lr) in enumerate(layers[2:end])  # assumes that layers[1] MUST be input layer without checking!
         i += 1  # skip index of layer 1
         # dispatch on type of lr
@@ -248,9 +254,9 @@ function feedforward!(layers, x_train, n_samples)
     return
 end
 
-function backprop!(layers, y_train, n_samples)
+function backprop!(layers, y, n_samples)
     # output layer is different
-    dloss_dz!(layers[end], y_train)
+    dloss_dz!(layers[end], y)
     layer_backward!(layers[end], layers[end-1], n_samples; output=true)
 
     # skip over output layer (end) and input layer (begin)
@@ -261,41 +267,69 @@ function backprop!(layers, y_train, n_samples)
     return
 end
 
-function weight_update!(layer, lr)
+######################
+# update weights and optimization
+######################
+
+
+function simple_update!(layer, hp)
     # use explicit loop to eliminate allocation and allow optimization
     @inbounds for i in eachindex(layer.weight)
-        layer.weight[i] -= lr * layer.grad_weight[i]
+        layer.weight[i] -= hp.lr * layer.grad_weight[i]
     end
 
     # Separate loop for bias
     @inbounds for i in eachindex(layer.bias)
-        layer.bias[i] -= lr * layer.grad_bias[i]
+        layer.bias[i] -= hp.lr * layer.grad_bias[i]
     end
-
 end
 
-function update_weight_loop!(layers, lambda)
+
+function reg_L1_update!(layer, hp)
+    @inbounds for i in eachindex(layer.weight)
+        layer.weight[i] -= hp.lr * (layer.grad_weight[i] + hp.regparm * sign(layer.weight[i]))
+    end
+
+    # Separate loop for bias with no regularization
+    @inbounds for i in eachindex(layer.bias)
+        layer.bias[i] -= hp.lr * layer.grad_bias[i]
+    end
+end
+
+function reg_L2_update!(layer, hp)
+    @inbounds for i in eachindex(layer.weight)
+        layer.weight[i] -= hp.lr * (layer.grad_weight[i] + hp.regparm * layer.weight[i])
+    end
+
+    # Separate loop for bias with no regularization
+    @inbounds for i in eachindex(layer.bias)
+        layer.bias[i] -= hp.lr * layer.grad_bias[i]
+    end
+end
+
+
+function update_weight_loop!(layers, hp)
     @views for lr in layers[begin+1:end]
         if (typeof(lr) == FlattenLayer) | (typeof(lr) == MaxPoolLayer)
             continue  # redundant but obvious
         end
-        weight_update!(lr, lambda)
+        hp.weight_update_f!(lr, hp)
     end
 end
 
 
-function train_loop!(layers; x_train, y_train, batch_size, epochs, minibatch_size=0, lr=0.01)
+function train_loop!(layers; x, y, full_batch, epochs, minibatch_size=0, hp=default_hp)
 
     # setup minibatches
     if minibatch_size == 0
         # setup noop minibatch parameters
         mini_num = 1
-        n_samples = batch_size
+        n_samples = full_batch
     else
-        if rem(batch_size, minibatch_size) != 0
+        if rem(full_batch, minibatch_size) != 0
             error("minibatch_size does not divide evenly into batch_size")
         else
-            mini_num = div(batch_size, minibatch_size)
+            mini_num = div(full_batch, minibatch_size)
             n_samples = minibatch_size
         end
     end
@@ -303,7 +337,7 @@ function train_loop!(layers; x_train, y_train, batch_size, epochs, minibatch_siz
     @show mini_num
     @show n_samples
 
-    stats = allocate_stats(batch_size, minibatch_size, epochs)
+    stats = allocate_stats(full_batch, minibatch_size, epochs)
     counter = 0
 
     for e = 1:epochs
@@ -312,25 +346,24 @@ function train_loop!(layers; x_train, y_train, batch_size, epochs, minibatch_siz
             if mini_num > 1
                 start_obs = (batno - 1) * minibatch_size + 1
                 end_obs = start_obs + minibatch_size - 1
-                x_train_part = view(x_train, :, :, :, start_obs:end_obs)
-                y_train_part = view(y_train, :, start_obs:end_obs)
+                x_part = view(x, :, :, :, start_obs:end_obs)
+                y_part = view(y, :, start_obs:end_obs)
             else
-                x_train_part = x_train
-                y_train_part = y_train
+                x_part = x
+                y_part = y
             end
 
-            # @show size(x_train_part)
-            # @show size(y_train_part)
             counter += 1
 
-            @show counter
-            feedforward!(layers, x_train_part, n_samples)
+            print("counter = ", counter, "\r")
+            flush(stdout)
+            feedforward!(layers, x_part, n_samples)
 
-            backprop!(layers, y_train_part, n_samples)
+            backprop!(layers, y_part, n_samples)
 
-            update_weight_loop!(layers, lr)
+            update_weight_loop!(layers, hp)
 
-            gather_stats!(stats, layers, y_train_part, counter, batno, e; to_console=false)
+            hp.do_stats  && gather_stats!(stats, layers, y_part, counter, batno, e; to_console=false)
 
         end
     end
@@ -345,10 +378,10 @@ end
 During each training loop, add loss and accuracy to stat_series for each batch trained.
 """
 function gather_stats!(stat_series, layers, y_train, counter, batno, epoch; to_console=true, to_series=true)
-    loss_val = cross_entropy_loss((layers[end].a), y_train, (stat_series.minibatch_size))
+    cost = cross_entropy_cost((layers[end].a), y_train, (stat_series.minibatch_size))
     acc = accuracy((layers[end].a), y_train)
     if to_series
-        stat_series.loss[counter] = loss_val
+        stat_series.cost[counter] = cost
         stat_series.acc[counter] = acc
     end
 
@@ -357,12 +390,23 @@ function gather_stats!(stat_series, layers, y_train, counter, batno, epoch; to_c
     end
 end
 
+
+function plot_stats(stats)
+    plot(stats.acc, label="Accuracy", color=:blue, ylabel="Accuracy")
+    plot!(twinx(), stats.loss, label="Cost", ylabel="Loss", color=:red)
+end
+
+
 function prediction(predlayers, x_input, y_input)
     n_samples = size(x_input, ndims(x_input))
     feedforward!(predlayers, x_input, n_samples)
     preds = predlayers[end].a
     acc = accuracy(preds, y_input)
-    cost = cross_entropy_loss(preds, y_input, n_samples)
+
+    @show size(preds)
+    @show size(y_input)
+
+    cost = cross_entropy_cost(preds, y_input, n_samples)
     println("Accuracy $acc  Cost $cost")
 end
 
@@ -370,18 +414,6 @@ end
 # ============================
 # Utility Functions
 # ============================
-
-function display_mnist_digit(digit_data, dims=[])
-    if length(dims) == 0
-        xside = yside = convert(Int, (sqrt(length(digit_data))))
-    elseif length(dims) == 1
-        xside = yside = dims[1]
-    elseif length(dims) >= 2
-        xside = dims[2]
-        yside = dims[1]
-    end
-    plot(Gray.(transpose(reshape(digit_data, xside, yside))), interpolation="nearest", showaxis=false)
-end
 
 function random_onehot(i, j)
     arr = zeros(i, j)
@@ -391,12 +423,6 @@ function random_onehot(i, j)
     end
     return arr
 end
-
-function plot_training(stats)
-    plot(stats.acc, label="Accuracy", color=:blue, ylabel="Accuracy")
-    plot!(twinx(), stats.loss, label="Cost", ylabel="Loss", color=:red)
-end
-
 
 # ============================
 # Save and load weights to/from files
@@ -420,69 +446,4 @@ function file2weights(suffix, pathstr)
         setfield!(getfield(layers, lr), :weight, deserialize(fname_weight))
     end
     return outlayers
-end
-
-# ============================
-# Functions for performance and memory testing
-# ============================
-
-function flatloop(arr1)
-    flatdim = size(arr1, 1) * size(arr1, 2) * size(arr1, 3)
-    ret = zeros(flatdim, size(arr1, 4))
-    innerdim = 0
-    outerdim = 0
-    for b in axes(arr1, 4)
-        outerdim += 1
-        innerdim = 0
-        for c in axes(arr1, 3)
-            for j in axes(arr1, 2)
-                for i in axes(arr1, 1)
-                    innerdim += 1
-                    ret[innerdim, outerdim] = arr1[i, j, c, b]
-                end
-            end
-        end
-    end
-    return ret
-end
-
-function flatloop!(arrout, arrin)
-    innerdim = 0
-    outerdim = 0
-    for b in axes(arrin, 4)
-        outerdim += 1
-        innerdim = 0
-        for c in axes(arrin, 3)
-            for j in axes(arrin, 2)
-                for i in axes(arrin, 1)
-                    innerdim += 1
-                    arrout[innerdim, outerdim] = arrin[i, j, c, b]
-                end
-            end
-        end
-    end
-    return
-end
-
-function flattenview!(arrout, arrin)
-    @views begin
-        # Flatten the first 3 dimensions of `x` into `layer.a`
-        for idx in axes(arrin, 4)  # iterate over batch dimension (4th dimension)
-            arrout[:, idx] .= arrin[:, :, :, idx][:]  # Flatten the first 3 dimensions and assign to `layer.a`
-        end
-    end
-end
-
-function softmax!(a::Array{Float64,2}, z::Array{Float64,2})
-    for c in axes(z, 2) # columns = samples
-        va = view(a, :, c)
-        vz = view(z, :, c)
-        va .= exp.(vz .- maximum(vz))
-        va .= va ./ (sum(va) .+ 1e-12)
-    end
-    return
-end
-
-function test_plot(s, e)
-    plot(s:e)
 end

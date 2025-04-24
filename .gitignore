@@ -11,3 +11,4 @@ ouput
 .stfolder
 .Rhistory
 *ipynb_checkpoints
+.DS_Store

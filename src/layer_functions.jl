@@ -54,15 +54,17 @@ end
 # Mutable structs for layers: hold weights, bias, data storage, dims
 # ============================
 
-# avoids repeatedly creating and unstructuring very slow namedtuples
+
 Base.@kwdef mutable struct ConvLayer
     name::Symbol = :noname
     activationf::Function = relu!
+    activation_gradf::Function = relu_grad!
     adj::Float64 = 0.0
     weight::Array{Float64,4} = Float64[;;;;]  # (filter_h, filter_w, in_channels, out_channels)
     padrule::Symbol = :same   # other option is :none
     stride::Int64 = 1     # assume stride is symmetrical for now
     bias::Vector{Float64} = Float64[]    # (out_channels)
+    dobias::Bool = true
     z::Array{Float64,4} = Float64[;;;;]
     pad_x::Array{Float64,4} = Float64[;;;;]
     a::Array{Float64,4} = Float64[;;;;]
@@ -86,13 +88,24 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
     out_w = div((prev_w + 2pad - lr.f_w), lr.stride) + 1
     ConvLayer(
         name=lr.name,
-        activationf=if lr.activation == :relu
-            relu!
-        elseif lr.activation == :none
-            noop
-        else
-            error("Only :relu, and :none  supported, not $(Symbol(lr.activation)).")
-        end,
+        activationf = if lr.activation == :relu
+                relu!
+            elseif lr.activation == :leaky_relu
+                leaky_relu!
+            elseif lr.activation == :none
+                noop
+            else
+                error("Only :relu, :leaky_relu and :none  supported, not $(Symbol(lr.activation)).")
+            end,
+        activation_gradf = if lr.activation == :relu
+                relu_grad!
+            elseif lr.activation == :leaky_relu
+                leaky_relu_grad!
+            elseif lr.activation == :none
+                noop
+            else
+                error("Only :relu, :leaky_relu and :none  supported, not $(Symbol(lr.activation)).")
+            end,
         adj=lr.adj,
         weight=he_initialize((lr.f_h, lr.f_w, inch, lr.outch), scale=2.2, adj=lr.adj),
         padrule=lr.padrule,
@@ -114,11 +127,13 @@ end
 Base.@kwdef mutable struct LinearLayer
     name::Symbol = :noname
     activationf::Function = relu!
+    activation_gradf::Function = relu_grad!
     adj::Float64 = 0.0
     weight::Array{Float64,2} = Float64[;;] # (output_dim, input_dim)
     output_dim::Int64 = 0
     input_dim::Int64 = 0
     bias::Vector{Float64} = Float64[]     # (output_dim)
+    dobias::Bool = true
     z::Array{Float64,2} = Float64[;;]       # feed forward linear combination result 
     a::Array{Float64,2} = Float64[;;]      # feed forward activation output
     # ALIAS TO ACTIVATION FROM LOWER BELOW used in backprop, but don't make a copy
@@ -139,15 +154,32 @@ function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
     inputs = prevlayer.output_dim    # columns
     LinearLayer(
         name=lr.name,
-        activationf=if lr.activation == :relu
-            relu!
-        elseif lr.activation == :none
-            noop
-        elseif lr.activation == :softmax
-            softmax!
-        else
-            error("Only :relu, :softmax and :none  supported, not $(Symbol(lr.activation)).")
-        end,
+        activationf = if lr.activation == :relu
+                relu!
+            elseif lr.activation == :leaky_relu
+                leaky_relu!
+            elseif lr.activation == :none
+                noop
+            elseif lr.activation == :softmax
+                softmax!
+            elseif lr.activation == :logistic   # rarely used any more
+                logistic!
+            elseif lr.activation == :regression
+                regression!
+            else
+                error("Only :relu, :leaky_relu, :softmax and :none  supported, not $(Symbol(lr.activation)).")
+            end,
+        activation_gradf = if lr.activation == :relu  # this has no effect on the output layer, but need it for hidden layers
+                relu_grad!
+            elseif lr.activation == :leaky_relu
+                leaky_relu_grad!
+            elseif lr.activation == :softmax
+                noop
+            elseif lr.activation == :none
+                noop
+            else
+                error("Only :relu, :leaky_relu, :softmax and :none  supported, not $(Symbol(lr.activation)).")
+            end,
         adj=lr.adj,
         weight=he_initialize((outputs, inputs), scale=1.5, adj=lr.adj),
         output_dim=outputs,
@@ -221,7 +253,7 @@ end
 
 Base.@kwdef mutable struct stat_series
     acc::Array{Float64,1} = Float64[]
-    loss::Array{Float64,1} = Float[]
+    cost::Array{Float64,1} = Float[]
     batch_size::Int = 0
     epochs::Int = 0
     minibatch_size = 0
@@ -255,7 +287,7 @@ function layer_forward!(layer::ConvLayer, x::AbstractArray{Float64,4}, batch_siz
                             for fh in axes(layer.weight, 1)
                                 layer.z[i, j, oc, b] += (layer.pad_x[i+fh-1, j+fw-1, ic, b]
                                                          *
-                                                         layer.weight[fh, fw, ic, oc])
+                                                        layer.weight[fh, fw, ic, oc])
                             end  # columns of filter
                         end  # rows of filter
                     end  # input channels
@@ -266,7 +298,7 @@ function layer_forward!(layer::ConvLayer, x::AbstractArray{Float64,4}, batch_siz
     end   # each sample in the minibatch or training set
 
     # activation
-    layer.activationf(layer, layer.adj)
+    layer.activationf(layer)
 
     return
 end
@@ -280,7 +312,7 @@ function layer_backward!(layer::ConvLayer, layer_next, n_samples)
     fill!(layer.eps_l, 0.0)
     fill!(layer.grad_a, 0.0)
 
-    relu_grad!(layer.grad_a, layer.z, layer.adj)
+    layer.activation_gradf(layer)
 
     # @show size(layer_next.eps_l)
     # @show size(layer.grad_a)
@@ -295,8 +327,6 @@ function layer_backward!(layer::ConvLayer, layer_next, n_samples)
         # nothing to do: arrays are going to come out the right size
     end
 
-
-    # @inbounds for b = 1:n_samples  # -> axes(eps_l, 4)
     @inbounds for b in axes(layer.eps_l, 4)
         for oc in axes(layer.weight, 4)
             for i = 1:H_out-(f_h-1) # prevent filter from extending out of bounds
@@ -351,8 +381,7 @@ function compute_grad_weight!(layer, n_samples)
                     # Extract the overlapping region of input corresponding to eps_l[:, :, oc, :]
                     local_patch = @view input_chan[fi:fi+H_out-1, fj:fj+W_out-1, :]
                     # Accumulate gradient for weight at (fi,fj, ic, oc)
-                    # layer.grad_weight[fi, fj, ic, oc] += sum(local_patch .* err)
-                    layer.grad_weight[fi, fj, ic, oc] += dot(err, local_patch)
+                    layer.grad_weight[fi, fj, ic, oc] += sum(l * e for (l, e) in zip(local_patch, err))
                 end
             end
         end
@@ -451,17 +480,17 @@ end
 
 function layer_forward!(layer::LinearLayer, x::Matrix{Float64}, batch_size)
     mul!(layer.z, layer.weight, x)  # in-place matrix multiplication
-    layer.z .+= layer.bias  # in-place addition with broadcasting
+    # layer.z .+= layer.bias  # in-place addition with broadcasting
 
     # Replace broadcasting with explicit loop
-    # for j in axes(layer.z, 2)  # For each column (sample)
-    #     for i in axes(layer.z, 1)  # For each row (output neuron)
-    #         layer.z[i, j] += layer.bias[i]
-    #     end
-    # end
+    for j in axes(layer.z, 2)  # For each column (sample)
+        for i in axes(layer.z, 1)  # For each row (output neuron)
+            layer.z[i, j] += layer.bias[i]
+        end
+    end
 
     layer.a_below = x   # assign alias for using in backprop
-    layer.activationf(layer, layer.adj)
+    layer.activationf(layer)
     return
 end
 
@@ -471,7 +500,7 @@ function layer_backward!(layer::LinearLayer, layer_next::LinearLayer, n_samples;
         mul!(layer.grad_weight, layer.eps_l, layer.a_below')  # in-place matrix multiplication
         layer.grad_weight .*= (1.0 / n_samples)  # in-place scaling
     else  # this is hidden layer
-        relu_grad!(layer.grad_a, layer.z, layer.adj)  # calculates layer.grad_a
+        layer.activation_gradf(layer)  # calculates layer.grad_a
         mul!(layer.eps_l, layer_next.weight', layer_next.eps_l)  # in-place matrix multiplication
         layer.eps_l .*= layer.grad_a  # in-place element-wise multiplication
         mul!(layer.grad_weight, layer.eps_l, layer.a_below')  # in-place matrix multiplication
@@ -490,35 +519,51 @@ end
 
 
 # =====================
-# Loss and activation functions
+# activation functions
 # =====================
 
-function dloss_dz!(layer, target)
-    layer.eps_l .= layer.a .- target
-end
-
-
-function relu!(layer, adj)
+function relu!(layer)
     @inbounds @fastmath begin
         for i in eachindex(layer.z)
             # Directly compare and assign, avoiding any temporary allocations
-            if layer.z[i] > adj
-                layer.a[i] = layer.z[i]
-            else
-                layer.a[i] = adj
-            end
+            layer.a[i] = ifelse(layer.z[i] >= 0.0, layer.z[i], 0.0)
         end
     end
 end
+
+function leaky_relu!(layer)
+    @inbounds @fastmath begin
+        for i in eachindex(layer.z)
+            # Directly compare and assign, avoiding any temporary allocations
+            layer.a[i] = ifelse(layer.z[i] >= 0.0, layer.z[i], layer.adj * layer.x[i])
+        end
+    end
+end
+
 
 # use for activation of conv or linear, when activation is requested as :none
 function noop(args...)
 end
 
-function relu_grad!(grad, z, adj)   # I suppose this is really leaky_relu...
-    @inbounds for i = eachindex(z)  # when passed any array, this will update in place
-        grad[i] = ifelse(z[i] > 0.0, 1.0, adj)  # prevent vanishing gradients by not using 0.0
+function relu_grad!(layer)   # I suppose this is really leaky_relu...
+    @inbounds for i = eachindex(layer.z)  # when passed any array, this will update in place
+        layer.grad_a[i] = ifelse(layer.z[i] > 0.0, 1.0, 0.0)  # prevent vanishing gradients by not using 0.0
     end
+end
+
+function leaky_relu_grad!(layer)   # I suppose this is really leaky_relu...
+    @inbounds for i = eachindex(layer.z)  # when passed any array, this will update in place
+        layer.grad_a[i] = ifelse(layer.z[i] > 0.0, 1.0, layer.adj)  # prevent vanishing gradients by not using 0.0
+    end
+end
+
+
+# =====================
+# classifier and loss functions
+# =====================
+
+function dloss_dz!(layer, target)
+    layer.eps_l .= layer.a .- target
 end
 
 # tested to have no allocations
@@ -532,22 +577,10 @@ function softmax!(layer, adj=0.0) # adj arg required for calling loop: not used
     return
 end
 
+function logistic!(layer, adj=0.0)
+    @fastmath layer.a .= 1.0 ./ (1.0 .+ exp.(.-layer.z))  
+end
 
-function cross_entropy_loss(pred::AbstractMatrix{Float64}, target::AbstractMatrix{Float64}, n_samples)
-    # this may not be obvious, but it is a non-allocating version
-    n = n_samples
-    log_sum1 = 0.0
-    log_sum2 = 0.0
-
-    @inbounds for i in eachindex(pred)
-        # First term: target * log(max(pred, 1e-20))
-        pred_val = max(pred[i], 1e-20)
-        log_sum1 += target[i] * log(pred_val)
-
-        # Second term: (1-target) * log(max(1-pred, 1e-20))
-        inv_pred = max(1.0 - pred[i], 1e-20)
-        log_sum2 += (1.0 - target[i]) * log(inv_pred)
-    end
-
-    return (-1.0 / n) * (log_sum1 + log_sum2)
+function regression!(layer, adj=0.0)
+    layer.a[:] = layer.z[:]
 end

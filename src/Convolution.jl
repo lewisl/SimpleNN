@@ -9,6 +9,7 @@ module Convolution
 
 include("layer_functions.jl")
 include("training.jl")
+include("mnist_fun.jl")
 
 # data structures for neural network
 export 
@@ -16,7 +17,8 @@ export
     ConvLayer, 
     LinearLayer, 
     FlattenLayer, 
-    MaxPoolLayer
+    MaxPoolLayer,
+    HyperParameters
 
 # creating layerspecs to define a model
 export 
@@ -28,7 +30,8 @@ export
 
 # functions you can use
 export 
-    preptrain,
+    setup_train,
+    setup_mnist,
     allocate_layers, 
     setup_preds,
     prediction,
@@ -37,7 +40,8 @@ export
     display_mnist_digit,
     weights2file,
     file2weights,
-    show_all_array_sizes
+    show_all_array_sizes,
+    plot_stats
 
 using Random
 using LinearAlgebra
