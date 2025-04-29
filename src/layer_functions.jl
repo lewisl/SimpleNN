@@ -51,7 +51,7 @@ end
 
 
 # ============================
-# Mutable structs for layers: hold weights, bias, data storage, dims
+# Mutable structs for layers: hold pre-allocated weights, bias, data storage
 # ============================
 
 
@@ -260,12 +260,15 @@ Base.@kwdef mutable struct stat_series
 end
 
 
-# =====================
-# ConvLayer
-# =====================
-
+# ==========================================
+# Layer functions for feedforward and backpropagation
+# ==========================================
 # feedforward layers are all called layer_forward! and dispatch on the layer type
 # backprop layers are all called layer_backward! and dispatch on the layer type
+
+
+# ConvLayer
+
 
 function layer_forward!(layer::ConvLayer, x::AbstractArray{Float64,4}, batch_size)
     layer.a_below = x   # as an alias, this might not work for backprop though it seems to
@@ -278,24 +281,25 @@ function layer_forward!(layer::ConvLayer, x::AbstractArray{Float64,4}, batch_siz
         layer.pad_x .= x
     end
 
-    @inbounds for b in axes(layer.z, 4)
-        for oc in axes(layer.z, 3)  # this could also be axes(layer.weight, 4)
-            for j in axes(layer.z, 2)
-                for i in axes(layer.z, 1)
-                    for ic in axes(layer.weight, 3)
-                        for fw in axes(layer.weight, 2)
-                            for fh in axes(layer.weight, 1)
-                                layer.z[i, j, oc, b] += (layer.pad_x[i+fh-1, j+fw-1, ic, b]
-                                                         *
-                                                        layer.weight[fh, fw, ic, oc])
-                            end  # columns of filter
-                        end  # rows of filter
-                    end  # input channels
-                    layer.z[i, j, oc, b] += layer.bias[oc]
-                end  # output column pixels
-            end   # output row pixels
-        end  # output channels
-    end   # each sample in the minibatch or training set
+    # Combine bias initialization with convolution in a single pass
+    @inbounds for b in axes(layer.z, 4)  # batch
+        for oc in axes(layer.z, 3)  # output channels
+            for j in axes(layer.z, 2)  # width
+                for i in axes(layer.z, 1)  # height
+                    # Initialize with bias and perform convolution in one pass
+                    layer.z[i, j, oc, b] = layer.bias[oc]
+                    for ic in axes(layer.weight, 3)  # input channels
+                        for fh in axes(layer.weight, 1)  # filter height
+                            for fw in axes(layer.weight, 2)  # filter width
+                                layer.z[i, j, oc, b] += layer.pad_x[i+fh-1, j+fw-1, ic, b] * 
+                                                        layer.weight[fh, fw, ic, oc]
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
 
     # activation
     layer.activationf(layer)
@@ -349,7 +353,7 @@ function layer_backward!(layer::ConvLayer, layer_next, n_samples)
     compute_grad_weight!(layer, n_samples)
 
     # Compute bias gradients
-    for oc = axes(layer.eps_l, 3) # the channels axis
+    @inbounds for oc = axes(layer.eps_l, 3) # the channels axis
         @views layer.grad_bias[oc] = sum(layer.eps_l[:, :, oc, :]) .* (1.0 / Float64(n_samples))
     end
 
@@ -392,15 +396,13 @@ function compute_grad_weight!(layer, n_samples)
     return   # nothing
 end
 
-# =====================
+
 # MaxPoolLayer
-# =====================
+
 
 
 # note: this implicitly assumes stride is the size of the patch
-# tested: it works
 function layer_forward!(layer::MaxPoolLayer, x::Array{Float64,4}, n_samples)
-    # layer.input_shape = size(x)
     (pool_h, pool_w) = layer.pool_size
     (H_out, W_out, C, B) = size(layer.a)
     # re-initialize
@@ -412,15 +414,23 @@ function layer_forward!(layer::MaxPoolLayer, x::Array{Float64,4}, n_samples)
         for c = 1:C
             for j = 1:W_out
                 for i = 1:H_out
-                    region = view(x, (pool_h*(i-1)+1):(pool_h*i), (pool_w*(j-1)+1):(pool_w*j), c, bn)
-                    max_val = maximum(region)
-                    layer.a[i, j, c, bn] = max_val
-                    for a = 1:pool_h, b = 1:pool_w
-                        if region[a, b] == max_val && !layer.mask[pool_h*(i-1)+a, pool_w*(j-1)+b, c, bn]
-                            layer.mask[pool_h*(i-1)+a, pool_w*(j-1)+b, c, bn] = true
-                            break
+                    # Find max value directly without creating a view
+                    max_val = typemin(Float64)
+                    max_a = 1
+                    max_b = 1
+                    for b = 1:pool_w
+                        for a = 1:pool_h
+                            val = x[pool_h*(i-1)+a, pool_w*(j-1)+b, c, bn]
+                            if val > max_val
+                                max_val = val
+                                max_a = a
+                                max_b = b
+                            end
                         end
                     end
+                    layer.a[i, j, c, bn] = max_val
+                    # Set mask for max position only
+                    layer.mask[pool_h*(i-1)+max_a, pool_w*(j-1)+max_b, c, bn] = true
                 end
             end
         end
@@ -450,13 +460,22 @@ function layer_backward!(layer::MaxPoolLayer, layer_next, n_samples)
 end
 
 
-# =====================
+
 # FlattenLayer
-# =====================
+
 
 function layer_forward!(layer::FlattenLayer, x::Array{Float64,4}, batch_size)
-    @inbounds for idx in axes(x, 4)  # iterate over batch dimension (4th dimension)
-        @views layer.a[:, idx] .= x[:, :, :, idx][:]  # Flatten the first 3 dimensions and assign to `layer.a`
+    h, w, ch, _ = size(x)
+    @inbounds for b in axes(x, 4)  # iterate over batch dimension
+        idx = 1
+        for c in axes(x, 3)  # iterate over channels
+            for j in axes(x, 2)  # iterate over width
+                for i in axes(x, 1)  # iterate over height
+                    layer.a[idx, b] = x[i, j, c, b]
+                    idx += 1
+                end
+            end
+        end
     end
     return
 end
@@ -465,24 +484,32 @@ end
 function layer_backward!(layer::FlattenLayer, layer_next::LinearLayer, batch_size)
     # Use pre-allocated dl_dflat array for matrix multiplication
     mul!(layer.dl_dflat, layer_next.weight', layer_next.eps_l)  # in-place matrix multiplication
-    # Reshape in-place using views
+    
+    # Reshape in-place using explicit indexing
     h, w, ch, _ = size(layer.eps_l)
-    @inbounds for i in 1:batch_size
-        @views layer.eps_l[:, :, :, i] .= reshape(layer.dl_dflat[:, i], h, w, ch)
+    @inbounds for b in 1:batch_size
+        idx = 1
+        for c in 1:ch
+            for j in 1:w
+                for i in 1:h
+                    layer.eps_l[i, j, c, b] = layer.dl_dflat[idx, b]
+                    idx += 1
+                end
+            end
+        end
     end
     return
 end
 
 
-# =====================
+
 # LinearLayer
-# =====================
+
 
 function layer_forward!(layer::LinearLayer, x::Matrix{Float64}, batch_size)
     mul!(layer.z, layer.weight, x)  # in-place matrix multiplication
-    # layer.z .+= layer.bias  # in-place addition with broadcasting
 
-    # Replace broadcasting with explicit loop
+    # explicit loop faster than broadcasting
     for j in axes(layer.z, 2)  # For each column (sample)
         for i in axes(layer.z, 1)  # For each row (output neuron)
             layer.z[i, j] += layer.bias[i]
@@ -507,9 +534,9 @@ function layer_backward!(layer::LinearLayer, layer_next::LinearLayer, n_samples;
         layer.grad_weight .*= (1.0 / n_samples)  # in-place scaling
     end
     # Compute bias gradient efficiently without allocations
-    fill!(layer.grad_bias, 0.0)  # Reset to zero
-    for j in axes(layer.eps_l, 2)  # Iterate over columns (batch dimension)
-        for i in axes(layer.eps_l, 1)  # Iterate over rows (output dimension)
+    fill!(layer.grad_bias, 0.0)  
+    for j in axes(layer.eps_l, 2)  
+        for i in axes(layer.eps_l, 1)  
             layer.grad_bias[i] += layer.eps_l[i, j]
         end
     end
@@ -525,8 +552,7 @@ end
 function relu!(layer)
     @inbounds @fastmath begin
         for i in eachindex(layer.z)
-            # Directly compare and assign, avoiding any temporary allocations
-            layer.a[i] = ifelse(layer.z[i] >= 0.0, layer.z[i], 0.0)
+            layer.a[i] = ifelse(layer.z[i] >= 0.0, layer.z[i], 0.0) # no allocations
         end
     end
 end
@@ -534,8 +560,7 @@ end
 function leaky_relu!(layer)
     @inbounds @fastmath begin
         for i in eachindex(layer.z)
-            # Directly compare and assign, avoiding any temporary allocations
-            layer.a[i] = ifelse(layer.z[i] >= 0.0, layer.z[i], layer.adj * layer.x[i])
+            layer.a[i] = ifelse(layer.z[i] >= 0.0, layer.z[i], layer.adj * layer.x[i]) # no allocations
         end
     end
 end
@@ -568,11 +593,27 @@ end
 
 # tested to have no allocations
 function softmax!(layer, adj=0.0) # adj arg required for calling loop: not used
-    for c in axes(layer.z, 2)
-        va = view(layer.a, :, c)
-        vz = view(layer.z, :, c)
-        va .= exp.(vz .- maximum(vz))
-        va .= va ./ (sum(va) .+ 1e-12)
+    @inbounds for c in axes(layer.z, 2)
+        # Find maximum in this column
+        max_val = typemin(Float64)
+        for i in axes(layer.z, 1)
+            if layer.z[i, c] > max_val
+                max_val = layer.z[i, c]
+            end
+        end
+        
+        # Compute exp and sum in one pass
+        sum_exp = 0.0
+        for i in axes(layer.z, 1)
+            layer.a[i, c] = exp(layer.z[i, c] - max_val)
+            sum_exp += layer.a[i, c]
+        end
+        
+        # Normalize
+        sum_exp = sum_exp + 1e-12  # Add epsilon for numerical stability
+        for i in axes(layer.z, 1)
+            layer.a[i, c] /= sum_exp
+        end
     end
     return
 end

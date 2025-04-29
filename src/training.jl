@@ -437,13 +437,14 @@ function weights2file(layers, suffix, pathstr)
     end
 end
 
-function file2weights(suffix, pathstr)
-    outlayers = init_layers(n_samples=batch_size)
-    for lr in fieldnames(typeof(outlayers))
-        fname_bias = joinpath(pathstr, string(lr) * "_bias" * '_' * suffix * ".dat")
-        fname_weight = joinpath(pathstr, string(lr) * "_weight" * '_' * suffix * ".dat")
-        setfield!(getfield(layers, lr), :bias, deserialize(fname_bias))
-        setfield!(getfield(layers, lr), :weight, deserialize(fname_weight))
-    end
-    return outlayers
-end
+# TODO this can't work any more
+# function file2weights(suffix, pathstr)
+#     outlayers = init_layers(n_samples=batch_size)
+#     for lr in fieldnames(typeof(outlayers))
+#         fname_bias = joinpath(pathstr, string(lr) * "_bias" * '_' * suffix * ".dat")
+#         fname_weight = joinpath(pathstr, string(lr) * "_weight" * '_' * suffix * ".dat")
+#         setfield!(getfield(layers, lr), :bias, deserialize(fname_bias))
+#         setfield!(getfield(layers, lr), :weight, deserialize(fname_weight))
+#     end
+#     return outlayers
+# end
