@@ -1,3 +1,18 @@
+#=
+Batch Normalization notes
+
+
+
+
+
+
+=#
+
+
+
+
+
+
 """
     struct LayerSpec
 
@@ -257,6 +272,29 @@ Base.@kwdef mutable struct stat_series
     batch_size::Int = 0
     epochs::Int = 0
     minibatch_size = 0
+end
+
+
+"""
+struct Batch_norm_params holds batch normalization parameters for
+feedfwd calculations and backprop training.
+"""
+Base.@kwdef mutable struct BatchNormLayer               # we will use bn as the struct variable
+    # learned batch parameters to center and scale data
+    gam::Vector{Vector{Float64}} = Float64[Float64[]]  # scaling parameter for z_norm
+    bet::Vector{Vector{Float64}} = Float64[Float64[]]  # shifting parameter for z_norm (equivalent to bias)
+    delta_gam::Vector{Vector{Float64}} = Float64[Float64[]]
+    delta_bet::Vector{Vector{Float64}} = Float64[Float64[]]
+    # for optimization updates of bn parameters
+    delta_v_gam::Vector{Vector{Float64}} = Float64[Float64[]]
+    delta_s_gam::Vector{Vector{Vector}} = Float64[Float64[]]
+    delta_v_bet::Vector{Vector{Float64}} = Float64[Float64[]]
+    delta_s_bet::Vector{Vector{Float64}} = Float64[Float64[]]
+    # for standardizing batch values
+    mu::Vector{Vector{Float64}} = Float64[Float64[]]          # mean of z; same size as bias = no. of input layer units
+    stddev::Vector{Vector{Float64}} = Float64[Float64[]]         # std dev of z;   ditto
+    mu_run::Vector{Vector{Float64}} = Float64[Float64[]]        # running average of mu
+    std_run::Vector{Vector{Float64}} = Float64[Float64[]]        # running average of stddev
 end
 
 

@@ -88,3 +88,34 @@ hp = HyperParameters(lr=0.004, reg=:L2, regparm=0.0006, do_stats=false)
 Results:
 > Training: Accuracy 0.9785666666666667  Cost 0.12997403008866698
 > Test: Accuracy 0.9714  Cost 0.1598375700439552
+
+
+#### three_linear 20 epochs
+
+Model:
+```julia
+three_linear = LayerSpec[
+    LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
+    flattenlayerspec(name=:flatten)
+    linearlayerspec(name=:linear1, output=256)
+    linearlayerspec(name=:linear1, output=256)
+    linearlayerspec(name=:linear2, output=256)
+    LayerSpec(h=10, kind=:linear, name=:output, activation=:softmax)
+];
+```
+
+Hyperparameters:
+
+```julia
+preptest = true
+full_batch = 60_000
+minibatch_size = 50
+epochs = 20   # 15 epochs yields near perfect training convergence
+layerspecs = three_linear
+
+hp = HyperParameters(lr=0.1, reg=:L2, regparm=0.0005, do_stats=false)
+```
+
+Results:
+> Training: Accuracy 0.9982  Cost 0.02208198240164045
+> Test: Accuracy 0.9815  Cost 0.10239645963369148

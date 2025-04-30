@@ -17,7 +17,6 @@ one_conv = LayerSpec[
     maxpoollayerspec(name=:maxpool1, f_h=2, f_w=2)
     LayerSpec(kind=:flatten, name=:flatten)
     LayerSpec(h=200, kind=:linear, activation=:relu, name=:linear1)
-    # LayerSpec(h=100, kind=:linear, activation=:relu, name=:linear2, adj=0.0)
     LayerSpec(h=10, kind=:linear, activation=:softmax, name=:output)
 ];
 
@@ -44,9 +43,9 @@ two_linear = LayerSpec[
 three_linear = LayerSpec[
     LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
     flattenlayerspec(name=:flatten)
-    linearlayerspec(name=:linear1, output=256, adj=0.0)
-    linearlayerspec(name=:linear1, output=256, adj=0.0)
-    linearlayerspec(name=:linear2, output=256, adj=0.0)
+    linearlayerspec(name=:linear1, output=256)
+    linearlayerspec(name=:linear1, output=256)
+    linearlayerspec(name=:linear2, output=256)
     LayerSpec(h=10, kind=:linear, name=:output, activation=:softmax)
 ];
 
@@ -54,10 +53,10 @@ three_linear = LayerSpec[
 preptest = true
 full_batch = 60_000
 minibatch_size = 50
-epochs = 10   # 15 epochs yields near perfect training convergence
-layerspecs = one_conv
+epochs = 20   # 15 epochs yields near perfect training convergence
+layerspecs = three_linear
 
-hp = HyperParameters(lr=0.08, reg=:L2, regparm=0.0009, do_stats=false)  # reg=:L2, regparm=0.002
+hp = HyperParameters(lr=0.1, reg=:L2, regparm=0.0005, do_stats=false)  # reg=:L2, regparm=0.002
 
 # %%
 

@@ -39,7 +39,7 @@ Base.@kwdef mutable struct HyperParameters
         elseif reg == :L2
             weight_update_f! = reg_L2_update!
         end
-        new(lr, reg, regparm, weight_update_f!)
+        new(lr, reg, regparm, weight_update_f!, do_stats)
     end
 end
 
@@ -124,6 +124,7 @@ function allocate_layers(lsvec::Vector{LayerSpec}, n_samples)
             push!(layerdat, MaxPoolLayer(lr, layerdat[idx-1], n_samples))
         elseif lr.kind == :flatten
             push!(layerdat, FlattenLayer(lr, layerdat[idx-1], n_samples))
+        elseif lr.kind == :batchnorm
         else
             error("Found unrecognized layer kind")
         end
