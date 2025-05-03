@@ -98,7 +98,7 @@ end
 function allocate_layers(lsvec::Vector{LayerSpec}, n_samples)
 
     Random.seed!(42)
-    layerdat = []
+    layerdat = Layer[]
 
     for (idx, lr) in enumerate(lsvec)
         if idx == 1
@@ -135,7 +135,7 @@ end
 
 function allocate_stats(batch_size, minibatch_size, epochs)
     no_of_batches = div(batch_size, minibatch_size)
-    stats = stat_series(
+    stats = StatSeries(
         acc=zeros(no_of_batches * epochs),
         cost=zeros(no_of_batches * epochs),
         batch_size=batch_size,
@@ -149,12 +149,21 @@ end
 # ============================
 
 
-function setup_preds(predlayerspecs, layers, n_samples)
+function setup_preds(predlayerspecs, layers::Vector{<:Layer}, n_samples)
     predlayers = allocate_layers(predlayerspecs, n_samples)
     for (prlr, lr) in zip(predlayers, layers)
         if (typeof(prlr) == ConvLayer) | (typeof(prlr) == LinearLayer)
             prlr.weight .= lr.weight
-            prlr.bias .= lr.bias
+            if prlr.dobias
+                prlr.bias .= lr.bias
+            end
+            if prlr.normparams isa BatchNorm
+                prlr.normparams.gam .= lr.normparams.gam
+                prlr.normparams.bet .= lr.normparams.bet
+                prlr.normparams.mu_run .= lr.normparams.mu_run
+                prlr.normparams.std_run .= lr.normparams.std_run
+                prlr.normparams.istraining = false
+            end
         end
     end
     return predlayers
@@ -243,19 +252,16 @@ end
 # Training Loop
 # ============================
 
-function feedforward!(layers, x, n_samples)
+function feedforward!(layers::Vector{<:Layer}, x, n_samples)
     layers[begin].a = x
-    @inbounds for (i, lr) in enumerate(layers[2:end])  # assumes that layers[1] MUST be input layer without checking!
-        i += 1  # skip index of layer 1
+    @inbounds for (i, lr) in zip(2:length(layers), layers[2:end])  # assumes that layers[1] MUST be input layer without checking!
         # dispatch on type of lr
-        # activation function is part of the layer definition
-        # @show typeof(lr)
         layer_forward!(lr, (layers[i-1].a), n_samples)
     end
     return
 end
 
-function backprop!(layers, y, n_samples)
+function backprop!(layers::Vector{<:Layer}, y, n_samples)
     # output layer is different
     dloss_dz!(layers[end], y)
     layer_backward!(layers[end], layers[end-1], n_samples; output=true)
@@ -273,10 +279,14 @@ end
 ######################
 
 
-function simple_update!(layer, hp)
+function simple_update!(layer::Layer, hp)
     # use explicit loop to eliminate allocation and allow optimization
     @inbounds for i in eachindex(layer.weight)
         layer.weight[i] -= hp.lr * layer.grad_weight[i]
+    end
+
+    if layer.normparams isa BatchNorm
+        update_batchnorm!(layer.normparams, hp)
     end
 
     # Separate loop for bias
@@ -286,7 +296,12 @@ function simple_update!(layer, hp)
 end
 
 
-function reg_L1_update!(layer, hp)
+function update_batchnorm!(bn::BatchNorm, hp)
+    @fastmath bn.gam .-= (hp.lr .* bn.delta_gam)
+    @fastmath bn.bet .-= (hp.lr .* bn.delta_bet)
+end
+
+function reg_L1_update!(layer::Layer, hp)
     @inbounds for i in eachindex(layer.weight)
         layer.weight[i] -= hp.lr * (layer.grad_weight[i] + hp.regparm * sign(layer.weight[i]))
     end
@@ -297,7 +312,7 @@ function reg_L1_update!(layer, hp)
     end
 end
 
-function reg_L2_update!(layer, hp)
+function reg_L2_update!(layer::Layer, hp)
     @inbounds for i in eachindex(layer.weight)
         layer.weight[i] -= hp.lr * (layer.grad_weight[i] + hp.regparm * layer.weight[i])
     end
@@ -309,7 +324,7 @@ function reg_L2_update!(layer, hp)
 end
 
 
-function update_weight_loop!(layers, hp)
+function update_weight_loop!(layers::Vector{<:Layer}, hp)
     @views for lr in layers[begin+1:end]
         if (typeof(lr) == FlattenLayer) | (typeof(lr) == MaxPoolLayer)
             continue  # redundant but obvious
@@ -319,7 +334,7 @@ function update_weight_loop!(layers, hp)
 end
 
 
-function train_loop!(layers; x, y, full_batch, epochs, minibatch_size=0, hp=default_hp)
+function train_loop!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size=0, hp=default_hp) where L <: Layer
 
     # setup minibatches
     if minibatch_size == 0
@@ -374,16 +389,16 @@ end
 
 
 """
-    gather_stats!(stat_series, layers, y_train, counter, batno, epoch; to_console=true, to_series=true)
+    gather_stats!(StatSeries, layers, y_train, counter, batno, epoch; to_console=true, to_series=true)
 
-During each training loop, add loss and accuracy to stat_series for each batch trained.
+During each training loop, add loss and accuracy to StatSeries for each batch trained.
 """
-function gather_stats!(stat_series, layers, y_train, counter, batno, epoch; to_console=true, to_series=true)
-    cost = cross_entropy_cost((layers[end].a), y_train, (stat_series.minibatch_size))
+function gather_stats!(StatSeries, layers, y_train, counter, batno, epoch; to_console=true, to_series=true)
+    cost = cross_entropy_cost((layers[end].a), y_train, (StatSeries.minibatch_size))
     acc = accuracy((layers[end].a), y_train)
     if to_series
-        stat_series.cost[counter] = cost
-        stat_series.acc[counter] = acc
+        StatSeries.cost[counter] = cost
+        StatSeries.acc[counter] = acc
     end
 
     if to_console
@@ -398,7 +413,7 @@ function plot_stats(stats)
 end
 
 
-function prediction(predlayers, x_input, y_input)
+function prediction(predlayers::Vector{<:Layer}, x_input, y_input)
     n_samples = size(x_input, ndims(x_input))
     feedforward!(predlayers, x_input, n_samples)
     preds = predlayers[end].a

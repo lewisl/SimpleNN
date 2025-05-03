@@ -15,28 +15,28 @@ one_conv = LayerSpec[
     LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
     convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu)
     maxpoollayerspec(name=:maxpool1, f_h=2, f_w=2)
-    LayerSpec(kind=:flatten, name=:flatten)
-    LayerSpec(h=200, kind=:linear, activation=:relu, name=:linear1)
+    flattenlayerspec(name=:flatten)
+    linearlayerspec(output=200, activation=:relu, name=:linear1)
     LayerSpec(h=10, kind=:linear, activation=:softmax, name=:output)
 ];
 
 
 two_conv = LayerSpec[
-    LayerSpec(name=:input, h=28, w=28, outch=1, kind=:input,)
+    LayerSpec(name=:input, h=28, w=28, outch=1, kind=:input)
     convlayerspec(name=:conv1, outch=24, f_h=3, f_w=3, activation=:relu)
     maxpoollayerspec(name=:maxpool1, f_h=2, f_w=2)
     convlayerspec(name=:conv2, outch=48, f_h=3, f_w=3, activation=:relu)
     maxpoollayerspec(name=:maxpool2, f_h=2, f_w=2)
     flattenlayerspec(name=:flatten)
     linearlayerspec(name=:linear1, output=200)
-    LayerSpec(name=:output, h=10, kind=:linear, activation=:softmax,)
+    LayerSpec(name=:output, h=10, kind=:linear, activation=:softmax)
 ];
 
 two_linear = LayerSpec[
     LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
     flattenlayerspec(name=:flatten)
-    linearlayerspec(name=:linear1, output=256)
-    linearlayerspec(name=:linear2, output=256)
+    linearlayerspec(name=:linear1, output=256, normalization=:batchnorm)
+    linearlayerspec(name=:linear2, output=256, normalization=:batchnorm)
     LayerSpec(h=10, kind=:linear, name=:output, activation=:softmax)
 ];
 
@@ -53,8 +53,8 @@ three_linear = LayerSpec[
 preptest = true
 full_batch = 60_000
 minibatch_size = 50
-epochs = 20   # 15 epochs yields near perfect training convergence
-layerspecs = three_linear
+epochs = 10   # 15 epochs yields near perfect training convergence
+layerspecs = one_conv
 
 hp = HyperParameters(lr=0.1, reg=:L2, regparm=0.0005, do_stats=false)  # reg=:L2, regparm=0.002
 
@@ -68,6 +68,8 @@ else
     x_train, y_train, x_test, y_test = setup_mnist(full_batch, preptest)
     testsize = size(y_test, 2)
 end;
+
+println(typeof(layers))
 
 
 # %%
