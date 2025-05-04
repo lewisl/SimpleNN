@@ -1,6 +1,18 @@
 # ============================
 # Functions for performance and memory testing
 # ============================
+using BenchmarkTools
+using LinearAlgebra
+
+
+
+function fastmu!(mu, x; dim)
+    cnt = length(x) / size(x,dim)
+
+    for (i, sl) in enumerate(eachslice(x,dims=dim))
+        mu[i] = sum(sl) / cnt
+    end     
+end
 
 function flatloop(arr1)
     flatdim = size(arr1, 1) * size(arr1, 2) * size(arr1, 3)

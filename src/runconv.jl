@@ -13,11 +13,11 @@ using Convolution
 # 64 channels is not great
 one_conv = LayerSpec[
     LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
-    convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu)
+    convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, normalization=:batchnorm)
     maxpoollayerspec(name=:maxpool1, f_h=2, f_w=2)
     flattenlayerspec(name=:flatten)
-    linearlayerspec(output=200, activation=:relu, name=:linear1)
-    LayerSpec(h=10, kind=:linear, activation=:softmax, name=:output)
+    linearlayerspec(output=200, activation=:relu, name=:linear1, normalization=:batchnorm)
+    LayerSpec(h=10, kind=:linear, name=:output, activation=:softmax)
 ];
 
 
@@ -53,7 +53,7 @@ three_linear = LayerSpec[
 preptest = true
 full_batch = 60_000
 minibatch_size = 50
-epochs = 10   # 15 epochs yields near perfect training convergence
+epochs = 15   # 15 epochs yields near perfect training convergence
 layerspecs = one_conv
 
 hp = HyperParameters(lr=0.1, reg=:L2, regparm=0.0005, do_stats=false)  # reg=:L2, regparm=0.002
@@ -68,8 +68,6 @@ else
     x_train, y_train, x_test, y_test = setup_mnist(full_batch, preptest)
     testsize = size(y_test, 2)
 end;
-
-println(typeof(layers))
 
 
 # %%

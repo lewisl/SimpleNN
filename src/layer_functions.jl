@@ -674,24 +674,24 @@ function batchnorm!(layer::LinearLayer)
         bn.std_run .= bn.std_run[1] == 0.0 ? bn.stddev : 0.95 .* bn.std_run + 0.05 .* bn.stddev
     else  # inference or prediction: use running mean and stddev
         layer.z_norm .= (layer.z .- bn.mu_run) ./ (bn.std_run .+ 1e-12) # normalized: aka xhat or zhat 
-        layer.z  .= layer.z_norm .* bn.gam .+ bn.bet  # shift & scale: often called y 
+        layer.z .= layer.z_norm .* bn.gam .+ bn.bet  # shift & scale: often called y 
     end
     return
 end
 
 function batchnorm!(layer::ConvLayer)
     bn = layer.normparams
-
+    c = size(layer.z,3)
     if bn.istraining
-        bn.mu .= mean(layer.z, dims=(1,2,4))           # use in backprop
-        bn.stddev .= std(layer.z, dims=(1,2,4))
-        layer.z_norm .= (layer.z .- bn.mu) ./ (bn.stddev .+ 1e-12) # normalized: often xhat or zhat  
-        layer.z[:] = layer.z_norm .* bn.gam .+ bn.bet  # shift & scale: often called y 
-        bn.mu_run[:] = bn.mu_run[1] == 0.0 ? bn.mu :  0.95 .* bn.mu_run .+ 0.05 .* bn.mu
-        bn.std_run[:] = bn.std_run[1] == 0.0 ? bn.stddev : 0.95 .* bn.std_run + 0.05 .* layer.stddev
+        bn.mu .= mean(layer.z, dims=(1,2,4))         # use in backprop
+        bn.stddev .= std(layer.z, dims=(1,2,4), corrected=false)
+        layer.z_norm .= @. (layer.z - bn.mu) / (bn.stddev + 1e-12) # normalized: often xhat or zhat  
+        layer.z .= layer.z_norm .* bn.gam .+ bn.bet  # shift & scale: often called y 
+        bn.mu_run .= bn.mu_run[1] == 0.0 ? bn.mu :  0.95 .* bn.mu_run .+ 0.05 .* bn.mu
+        bn.std_run .= bn.std_run[1] == 0.0 ? bn.stddev : 0.95 .* bn.std_run + 0.05 .* layer.stddev
     else
         layer.z_norm .= (layer.z .- bn.mu_run) ./ (bn.std_run .+ 1e-12) # normalized: aka xhat or zhat 
-        layer.z  .= layer.z_norm .* bn.gam .+ bn.bet  # shift & scale: often called y 
+        layer.z .= layer.z_norm .* bn.gam .+ bn.bet  # shift & scale: often called y 
     end
     return
 end
