@@ -56,6 +56,35 @@ Results:
 > Training: Accuracy 0.9893666666666666  Cost 0.08542955219525523
 > Test: Accuracy 0.9809  Cost 0.1166747099312071
 
+#### one_conv 10 epochs
+
+Model:
+```julia
+one_conv = LayerSpec[
+    LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
+    convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, )  #normalization=:batchnorm
+    maxpoollayerspec(name=:maxpool1, f_h=2, f_w=2)
+    flattenlayerspec(name=:flatten)
+    linearlayerspec(output=200, activation=:relu, name=:linear1, normalization=:batchnorm)
+    LayerSpec(h=10, kind=:linear, name=:output, activation=:softmax)
+];
+```
+
+Hyperparameters:
+```julia
+preptest = true
+full_batch = 60_000
+minibatch_size = 50
+epochs = 10   # 15 epochs yields near perfect training convergence
+layerspecs = one_conv
+
+hp = HyperParameters(lr=0.1, reg=:L2, regparm=0.0004, do_stats=false)
+```
+
+Results:
+> Training: Accuracy 0.9970666666666667  Cost 0.028493152668834804
+> 
+> Test: Accuracy 0.9836  Cost 0.09114865168921367
 
 #### two_conv 10 epochs
 

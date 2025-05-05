@@ -143,10 +143,10 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
                                     error("Only :batchnorm and :none  supported, not $(Symbol(lr.normalization)).")
                                 end,
         normparams = if lr.normalization == :batchnorm
-                        BatchNorm(gam=ones(outch), bet=zeros(outch), 
-                            delta_gam=zeros(outch), delta_bet=zeros(outch), 
-                            mu=zeros(outch), stddev=ones(outch), 
-                            mu_run=zeros(outch), std_run=zeros(outch))
+                        BatchNorm{Array{Float64,4},Array{Float64,2}}(gam=ones(1,1,outch,1), bet=zeros(1,1,outch,1), 
+                            delta_gam=zeros(1,1,outch,1), delta_bet=zeros(1,1,outch,1), 
+                            mu=zeros(1,1,outch,1), stddev=ones(1,1,outch,1), 
+                            mu_run=zeros(1,1,outch,1), std_run=zeros(1,1,outch,1))
                     else
                         NoNorm()
                     end,
@@ -245,7 +245,7 @@ function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
                                     error("Only :batchnorm and :none  supported, not $(Symbol(lr.normalization)).")
                                 end,
         normparams = if lr.normalization == :batchnorm
-                            BatchNorm(gam=ones(outputs), bet=zeros(outputs), 
+                            BatchNorm{Vector{Float64},Vector{Float64}}(gam=ones(outputs), bet=zeros(outputs), 
                                 delta_gam=zeros(outputs), delta_bet=zeros(outputs), 
                                 mu=zeros(outputs), stddev=ones(outputs), 
                                 mu_run=zeros(outputs), std_run=zeros(outputs))
@@ -338,22 +338,22 @@ end
 struct Batch_norm_params holds batch normalization parameters for
 feedfwd calculations and backprop training.
 """
-Base.@kwdef mutable struct BatchNorm <: NormParam  # can this work for conv and linear???? array sizes differ
+Base.@kwdef mutable struct BatchNorm{T <: AbstractArray, U <: AbstractArray} <: NormParam  # can this work for conv and linear???? array sizes differ
     # learned batch parameters to center and scale data
-    gam::Vector{Float64} = Float64[]  # scaling parameter for z_norm
-    bet::Vector{Float64} = Float64[]  # shifting parameter for z_norm (equivalent to bias)
-    delta_gam::Vector{Float64} = Float64[]
-    delta_bet::Vector{Float64} = Float64[]
+    gam::T  # scaling parameter for z_norm
+    bet::T  # shifting parameter for z_norm (equivalent to bias)
+    delta_gam::T
+    delta_bet::T
     # for optimization updates of bn parameters
-    delta_v_gam::Vector{Float64} = Float64[]
-    delta_s_gam::Vector{Vector} = Float64[]
-    delta_v_bet::Vector{Float64} = Float64[]
-    delta_s_bet::Vector{Float64} = Float64[]
+    # delta_v_gam::U
+    # delta_s_gam::U
+    # delta_v_bet::U
+    # delta_s_bet::U
     # for standardizing batch values
-    mu::Vector{Float64} = Float64[]          # mean of z; same size as bias = no. of input layer units
-    stddev::Vector{Float64} = Float64[]         # std dev of z;   ditto
-    mu_run::Vector{Float64} = Float64[]        # running average of mu
-    std_run::Vector{Float64} = Float64[]        # running average of stddev
+    mu::T         # mean of z; same size as bias = no. of input layer units
+    stddev::T       # std dev of z;   ditto
+    mu_run::T      # running average of mu
+    std_run::T       # running average of stddev
     istraining::Bool = true     # set to false for inference or prediction
 end
 
@@ -432,6 +432,8 @@ function layer_backward!(layer::ConvLayer, layer_above, n_samples)
         # nothing to do: arrays are going to come out the right size
     end
 
+    layer.normalization_gradf(layer) # either noop or batchnorm_grad!
+
     @inbounds for b in axes(layer.eps_l, 4)
         for oc in axes(layer.weight, 4)
             for i = 1:H_out-(f_h-1) # prevent filter from extending out of bounds
@@ -449,7 +451,7 @@ function layer_backward!(layer::ConvLayer, layer_above, n_samples)
         end
     end
 
-    layer.normalization_gradf(layer) # either noop or batchnorm_grad!
+    # @show size(layer.eps_l)
 
     # compute gradients
     compute_grad_weight!(layer, n_samples)
@@ -668,6 +670,11 @@ function batchnorm!(layer::LinearLayer)
         bn.mu .= mean(layer.z, dims=2)          # use in backprop
         bn.stddev .= std(layer.z, dims=2)
 
+
+        # @show size(bn.mu)
+        # @show size(bn.stddev)
+        # @show size(layer.z_norm)
+
         layer.z_norm .= (layer.z .- bn.mu) ./ (bn.stddev .+ 1e-12) # normalized: often xhat or zhat  
         layer.z .= layer.z_norm .* bn.gam .+ bn.bet  # shift & scale: often called y 
         bn.mu_run .= bn.mu_run[1] == 0.0 ? bn.mu :  0.95 .* bn.mu_run .+ 0.05 .* bn.mu
@@ -682,13 +689,18 @@ end
 function batchnorm!(layer::ConvLayer)
     bn = layer.normparams
     c = size(layer.z,3)
+
     if bn.istraining
-        bn.mu .= mean(layer.z, dims=(1,2,4))         # use in backprop
-        bn.stddev .= std(layer.z, dims=(1,2,4), corrected=false)
-        layer.z_norm .= @. (layer.z - bn.mu) / (bn.stddev + 1e-12) # normalized: often xhat or zhat  
-        layer.z .= layer.z_norm .* bn.gam .+ bn.bet  # shift & scale: often called y 
+
+        # @show size(bn.mu)
+        # @show size(layer.z)
+
+        bn.mu .= mean(layer.z, dims=(1,2,4))  # reshape(mean(layer.z, dims=(1,2,4)), c)        # use in backprop
+        bn.stddev .= std(layer.z, dims=(1,2,4), corrected=false)  # reshape(std(layer.z, dims=(1,2,4), corrected=false), c)
+        @. layer.z_norm = (layer.z - bn.mu) / (bn.stddev + 1e-12) # normalized: often xhat or zhat  
+        @. layer.z = layer.z_norm * bn.gam + bn.bet  # shift & scale: often called y 
         bn.mu_run .= bn.mu_run[1] == 0.0 ? bn.mu :  0.95 .* bn.mu_run .+ 0.05 .* bn.mu
-        bn.std_run .= bn.std_run[1] == 0.0 ? bn.stddev : 0.95 .* bn.std_run + 0.05 .* layer.stddev
+        bn.std_run .= bn.std_run[1] == 0.0 ? bn.stddev : 0.95 .* bn.std_run + 0.05 .* bn.stddev
     else
         layer.z_norm .= (layer.z .- bn.mu_run) ./ (bn.std_run .+ 1e-12) # normalized: aka xhat or zhat 
         layer.z .= layer.z_norm .* bn.gam .+ bn.bet  # shift & scale: often called y 
@@ -703,6 +715,7 @@ function batchnorm_grad!(layer::LinearLayer)
 
     bn.delta_bet .= sum(layer.eps_l, dims=2) ./ mb
     bn.delta_gam .= sum(layer.eps_l .* layer.z_norm, dims=2) ./ mb
+
     layer.eps_l .= bn.gam .* layer.eps_l  # often called delta_z_norm at this stage
     # often called delta_z, dx, dout, or dy
     layer.eps_l .= ((1.0 / mb) .* (1.0 ./ (bn.stddev .+ 1e-12))  .* 
@@ -710,15 +723,16 @@ function batchnorm_grad!(layer::LinearLayer)
                 layer.z_norm .* sum(layer.eps_l .* layer.z_norm, dims=2)))   # replace with non-allocating approach
 end
 
-function batchnorm_grad!(layer::ConvLayer)
+function batchnorm_grad!(layer::ConvLayer, layer_above::Layer)
     bn = layer.normparams
     mb = size(layer.eps_l, 2)
 
     bn.delta_bet .= sum(layer.eps_l, dims=(1,2,4)) ./ mb
     bn.delta_gam .= sum(layer.eps_l .* layer.z_norm, dims=(1,2,4)) ./ mb
-    layer.eps_l .= bn.gam .* layer.eps_l  # often called delta_z_norm at this stage
-    # often called delta_z, dx, dout, or dy
-    layer.eps_l .= ((1.0 / mb) .* (1.0 ./ (bn.stddev .+ 1e-12))  .* 
+
+    @. layer.eps_l = bn.gam * layer.eps_l  # often called delta_z_norm at this stage
+    
+    layer.eps_l .= ((1.0 / mb) .* (1.0 ./ (bn.stddev .+ 1e-12))  .*   # often called delta_z, dx, dout, or dy
             (mb .* layer.eps_l .- sum(layer.eps_l, dims=(1,2,4)) .-
                 layer.z_norm .* sum(layer.eps_l .* layer.z_norm, dims=(1,2,4))))   # replace with non-allocating approach
 end 
