@@ -3,7 +3,7 @@
 using Convolution
 
 
-# %% 
+# %%
 
 # ============================
 # Sample model definitions (aka layerspecs)
@@ -13,7 +13,7 @@ using Convolution
 # 64 channels is not great
 one_conv = LayerSpec[
     LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
-    convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, )  #normalization=:batchnorm
+    convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, normalization=:batchnorm)  # normalization=:batchnorm
     maxpoollayerspec(name=:maxpool1, f_h=2, f_w=2)
     flattenlayerspec(name=:flatten)
     linearlayerspec(output=200, activation=:relu, name=:linear1, normalization=:batchnorm)
@@ -53,7 +53,7 @@ three_linear = LayerSpec[
 preptest = true
 full_batch = 60_000
 minibatch_size = 50
-epochs = 10   # 15 epochs yields near perfect training convergence
+epochs = 10  # 15 epochs yields near perfect training convergence
 layerspecs = one_conv
 
 hp = HyperParameters(lr=0.1, reg=:L2, regparm=0.0004, do_stats=false)  # reg=:L2, regparm=0.002
@@ -72,8 +72,8 @@ end;
 
 # %%
 
-stats = train_loop!(layers; x=x_train, y=y_train, full_batch=full_batch, 
-        epochs=epochs, minibatch_size=minibatch_size, hp=hp);
+stats = train_loop!(layers; x=x_train, y=y_train, full_batch=full_batch,
+    epochs=epochs, minibatch_size=minibatch_size, hp=hp);
 
 
 # %%  predict with full training set
@@ -92,11 +92,11 @@ samplenumber = 20;
 
 pred1layers = Convolution.setup_preds(layerspecs, layers, 1);
 
-x_single = x_train[:,:,:,samplenumber];
-x_single = reshape(x_single,28,28,1,1);
+x_single = x_train[:, :, :, samplenumber];
+x_single = reshape(x_single, 28, 28, 1, 1);
 
-y_single = y_train[:,samplenumber];
-y_single = reshape(y_single,:,1);
+y_single = y_train[:, samplenumber];
+y_single = reshape(y_single, :, 1);
 
 
 display_mnist_digit(x_single)
@@ -104,7 +104,7 @@ display_mnist_digit(x_single)
 Convolution.feedforward!(pred1layers, x_single, 1);
 pred1 = pred1layers[end].a;
 
-target_digit = Convolution.find_max_idx(y_single[:,1])-1;
-pred_digit =  Convolution.find_max_idx(pred1[:,1 ])-1;
+target_digit = Convolution.find_max_idx(y_single[:, 1]) - 1;
+pred_digit = Convolution.find_max_idx(pred1[:, 1]) - 1;
 
 println("\nTarget digit: ", target_digit, "  Predicted digit: ", pred_digit)

@@ -1,8 +1,7 @@
 #=
-Batch Normalization notes and Todo
-
-
-- fix a few performance issues and memory allocations
+- fix batch normalization for conv networks
+- can we do batch prediction? 
+- or other means to speed up full batch prediction and use less memory
 
 =#
 
@@ -46,7 +45,7 @@ end
 """
     convlayerspec(;name::Symbol, activation::Symbol, adj::Float64=0.002, h::Int64=0, w::Int64=0, outch::Int64=0, f_h::Int64, f_w::Int64, inch::Int64=0, padrule::Symbol=:same)
 
-Only inputs needed for a convlayer are passed to the LayerSpec. 
+Only inputs needed for a convlayer are passed to the LayerSpec.
 Note that h, w, and inch will be calculated from the previous layer,
 which should be an image input, another conv layer, or a maxpooling layer.
 You must provide inputs for name, activation, outch, f_h, and f_w.
@@ -79,7 +78,7 @@ Base.@kwdef mutable struct ConvLayer <: Layer
     activation_gradf::Function = relu_grad!
     normalizationf::Function = noop
     normalization_gradf::Function = noop
-    normparams::NormParam = NoNorm()   # initialize to noop that won't allocate
+    normparams::NormParam  # = NoNorm()   # initialize to noop that won't allocate
     adj::Float64 = 0.0
     weight::Array{Float64,4} = Float64[;;;;]  # (filter_h, filter_w, in_channels, out_channels)
     padrule::Symbol = :same   # other option is :none
@@ -87,7 +86,7 @@ Base.@kwdef mutable struct ConvLayer <: Layer
     bias::Vector{Float64} = Float64[]    # (out_channels)
     dobias::Bool = true
     z::Array{Float64,4} = Float64[;;;;]
-    z_norm::Array{Float64,4} = Float64[;;;;]  # if doing batchnorm
+    z_norm::Array{Float64,4} = Float64[;;;;]  # if doing batchnorm: 2d to simplify batchnorm calcs
     pad_x::Array{Float64,4} = Float64[;;;;]
     a::Array{Float64,4} = Float64[;;;;]
     a_below::Array{Float64,4} = Float64[;;;;]
@@ -108,54 +107,51 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
     # output image dims: calculated once rather than over and over in training loop
     out_h = div((prev_h + 2pad - lr.f_h), lr.stride) + 1
     out_w = div((prev_w + 2pad - lr.f_w), lr.stride) + 1
+    if lr.normalization == :batchnorm
+            normalizationf = batchnorm!
+            normalization_gradf = batchnorm_grad!
+            normparams=BatchNorm{Vector{Float64},Vector{Float64}}(gam=ones(outch), bet=zeros(outch),
+                delta_gam=zeros(outch), delta_bet=zeros(outch),
+                mu=zeros(outch), stddev=zeros(outch),
+                mu_run=zeros(outch), std_run=zeros(outch))
+            dobias = false
+        elseif lr.normalization == :none
+            normalizationf = noop
+            normalization_gradf = noop
+            normparams = NoNorm()
+            dobias = true
+        else
+            error("Only :batchnorm and :none  supported, not $(Symbol(lr.normalization)).")
+        end
     ConvLayer(
         name=lr.name,
-        activationf = if lr.activation == :relu
-                relu!
-            elseif lr.activation == :leaky_relu
-                leaky_relu!
-            elseif lr.activation == :none
-                noop
-            else
-                error("Only :relu, :leaky_relu and :none  supported, not $(Symbol(lr.activation)).")
-            end,
-        activation_gradf = if lr.activation == :relu
-                relu_grad!
-            elseif lr.activation == :leaky_relu
-                leaky_relu_grad!
-            elseif lr.activation == :none
-                noop
-            else
-                error("Only :relu, :leaky_relu and :none  supported, not $(Symbol(lr.activation)).")
-            end,
-        normalizationf = if lr.normalization == :batchnorm
-                batchnorm!
-            elseif lr.normalization == :none
-                noop
-            else
-                error("Only :batchnorm and :none  supported, not $(Symbol(lr.normalization)).")
-            end,
-        normalization_gradf = if lr.normalization == :batchnorm
-                                    batchnorm_grad!
-                                elseif lr.normalization == :none
-                                    noop
-                                else
-                                    error("Only :batchnorm and :none  supported, not $(Symbol(lr.normalization)).")
-                                end,
-        normparams = if lr.normalization == :batchnorm
-                        BatchNorm{Array{Float64,4},Array{Float64,2}}(gam=ones(1,1,outch,1), bet=zeros(1,1,outch,1), 
-                            delta_gam=zeros(1,1,outch,1), delta_bet=zeros(1,1,outch,1), 
-                            mu=zeros(1,1,outch,1), stddev=ones(1,1,outch,1), 
-                            mu_run=zeros(1,1,outch,1), std_run=zeros(1,1,outch,1))
-                    else
-                        NoNorm()
-                    end,
+        activationf=if lr.activation == :relu
+            relu!
+        elseif lr.activation == :leaky_relu
+            leaky_relu!
+        elseif lr.activation == :none
+            noop
+        else
+            error("Only :relu, :leaky_relu and :none  supported, not $(Symbol(lr.activation)).")
+        end,
+        activation_gradf=if lr.activation == :relu
+            relu_grad!
+        elseif lr.activation == :leaky_relu
+            leaky_relu_grad!
+        elseif lr.activation == :none
+            noop
+        else
+            error("Only :relu, :leaky_relu and :none  supported, not $(Symbol(lr.activation)).")
+        end,
+        normalizationf=normalizationf,
+        normalization_gradf=normalization_gradf,
+        normparams=normparams,
         adj=lr.adj,
         weight=he_initialize((lr.f_h, lr.f_w, inch, lr.outch), scale=2.2, adj=lr.adj),
         padrule=lr.padrule,
         stride=lr.stride,
         bias=zeros(outch),
-        dobias=ifelse(lr.normalization != :none, true, false),
+        dobias=dobias,
         pad_x=zeros(out_h + 2pad, out_w + 2pad, inch, n_samples),
         pad_a_below=zeros(prev_h + 2pad, prev_w + 2pad, inch, n_samples),
         z=zeros(out_h, out_w, outch, n_samples),
@@ -183,7 +179,7 @@ Base.@kwdef mutable struct LinearLayer <: Layer
     input_dim::Int64 = 0
     bias::Vector{Float64} = Float64[]     # (output_dim)
     dobias::Bool = true
-    z::Array{Float64,2} = Float64[;;]       # feed forward linear combination result 
+    z::Array{Float64,2} = Float64[;;]       # feed forward linear combination result
     z_norm::Array{Float64,2} = Float64[;;]  # if doing batchnorm
     a::Array{Float64,2} = Float64[;;]      # feed forward activation output
     # ALIAS TO ACTIVATION FROM LOWER BELOW used in backprop, but don't make a copy
@@ -197,67 +193,64 @@ Base.@kwdef mutable struct LinearLayer <: Layer
     grad_bias::Vector{Float64} = Float64[]
 end
 
-# method to create a LinearLayer with some inputs calculated based on LayerSpec inputs, then 
+# method to create a LinearLayer with some inputs calculated based on LayerSpec inputs, then
 function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
     # weight dims
     outputs = lr.h        # rows
     inputs = prevlayer.output_dim    # columns
+    if lr.normalization == :batchnorm
+            normalizationf = batchnorm!
+            normalization_gradf = batchnorm_grad!
+            normparams=BatchNorm{Vector{Float64},Vector{Float64}}(gam=ones(outputs), bet=zeros(outputs),
+                delta_gam=zeros(outputs), delta_bet=zeros(outputs),
+                mu=zeros(outputs), stddev=zeros(outputs),
+                mu_run=zeros(outputs), std_run=zeros(outputs))
+            dobias = false
+        elseif lr.normalization == :none
+            normalizationf = noop
+            normalization_gradf = noop
+            normparams = NoNorm()
+            dobias = true
+        else
+            error("Only :batchnorm and :none  supported, not $(Symbol(lr.normalization)).")
+        end
     LinearLayer(
         name=lr.name,
-        activationf = if lr.activation == :relu
-                relu!
-            elseif lr.activation == :leaky_relu
-                leaky_relu!
-            elseif lr.activation == :none
-                noop
-            elseif lr.activation == :softmax
-                softmax!
-            elseif lr.activation == :logistic   # rarely used any more
-                logistic!
-            elseif lr.activation == :regression
-                regression!
-            else
-                error("Only :relu, :leaky_relu, :softmax and :none  supported, not $(Symbol(lr.activation)).")
-            end,
-        activation_gradf = if lr.activation == :relu  # this has no effect on the output layer, but need it for hidden layers
-                relu_grad!
-            elseif lr.activation == :leaky_relu
-                leaky_relu_grad!
-            elseif lr.activation == :softmax
-                noop
-            elseif lr.activation == :none
-                noop
-            else
-                error("Only :relu, :leaky_relu, :softmax and :none  supported, not $(Symbol(lr.activation)).")
-            end,
-        normalizationf = if lr.normalization == :batchnorm
-                            batchnorm!
-                        elseif lr.normalization == :none
-                            noop
-                        else
-                            error("Only :batchnorm and :none  supported, not $(Symbol(lr.normalization)).")
-                        end,
-        normalization_gradf = if lr.normalization == :batchnorm
-                                    batchnorm_grad!
-                                elseif lr.normalization == :none
-                                    noop
-                                else
-                                    error("Only :batchnorm and :none  supported, not $(Symbol(lr.normalization)).")
-                                end,
-        normparams = if lr.normalization == :batchnorm
-                            BatchNorm{Vector{Float64},Vector{Float64}}(gam=ones(outputs), bet=zeros(outputs), 
-                                delta_gam=zeros(outputs), delta_bet=zeros(outputs), 
-                                mu=zeros(outputs), stddev=ones(outputs), 
-                                mu_run=zeros(outputs), std_run=zeros(outputs))
-                        else
-                            NoNorm()
-                        end,
+        activationf=if lr.activation == :relu
+            relu!
+        elseif lr.activation == :leaky_relu
+            leaky_relu!
+        elseif lr.activation == :none
+            noop
+        elseif lr.activation == :softmax
+            softmax!
+        elseif lr.activation == :logistic   # rarely used any more
+            logistic!
+        elseif lr.activation == :regression
+            regression!
+        else
+            error("Only :relu, :leaky_relu, :softmax and :none  supported, not $(Symbol(lr.activation)).")
+        end,
+        activation_gradf=if lr.activation == :relu  # this has no effect on the output layer, but need it for hidden layers
+            relu_grad!
+        elseif lr.activation == :leaky_relu
+            leaky_relu_grad!
+        elseif lr.activation == :softmax
+            noop
+        elseif lr.activation == :none
+            noop
+        else
+            error("Only :relu, :leaky_relu, :softmax and :none  supported, not $(Symbol(lr.activation)).")
+        end,
+        normalizationf=normalizationf,
+        normalization_gradf=normalization_gradf,
+        normparams=normparams,
         adj=lr.adj,
         weight=he_initialize((outputs, inputs), scale=1.5, adj=lr.adj),
         output_dim=outputs,
         input_dim=inputs,
         bias=zeros(outputs),
-        dobias=ifelse(lr.normalization != :none, true, false),
+        dobias=dobias,
         z=zeros(outputs, n_samples),
         z_norm=ifelse(lr.normalization == :batchnorm, zeros(outputs, n_samples), zeros(0, 0)),
         a=zeros(outputs, n_samples),
@@ -338,7 +331,7 @@ end
 struct Batch_norm_params holds batch normalization parameters for
 feedfwd calculations and backprop training.
 """
-Base.@kwdef mutable struct BatchNorm{T <: AbstractArray, U <: AbstractArray} <: NormParam  # can this work for conv and linear???? array sizes differ
+Base.@kwdef mutable struct BatchNorm{T<:AbstractArray,U<:AbstractArray} <: NormParam  # can this work for conv and linear???? array sizes differ
     # learned batch parameters to center and scale data
     gam::T  # scaling parameter for z_norm
     bet::T  # shifting parameter for z_norm (equivalent to bias)
@@ -390,7 +383,7 @@ function layer_forward!(layer::ConvLayer, x::AbstractArray{Float64,4}, batch_siz
                     for ic in axes(layer.weight, 3)  # input channels
                         for fh in axes(layer.weight, 1)  # filter height
                             for fw in axes(layer.weight, 2)  # filter width
-                                layer.z[i, j, oc, b] += layer.pad_x[i+fh-1, j+fw-1, ic, b] * 
+                                layer.z[i, j, oc, b] += layer.pad_x[i+fh-1, j+fw-1, ic, b] *
                                                         layer.weight[fh, fw, ic, oc]
                             end
                         end
@@ -420,7 +413,9 @@ function layer_backward!(layer::ConvLayer, layer_above, n_samples)
     layer.activation_gradf(layer)
 
     # @show size(layer_above.eps_l)
+    # @show size(layer.pad_next_eps)
     # @show size(layer.grad_a)
+    # @show size(layer.eps_l)
 
     layer_above.eps_l .*= layer.grad_a
 
@@ -429,7 +424,7 @@ function layer_backward!(layer::ConvLayer, layer_above, n_samples)
         fill!(layer.pad_next_eps, 0.0)
         @views layer.pad_next_eps[2:end-1, 2:end-1, :, :] .= layer_above.eps_l
     elseif layer.padrule == :same
-        # nothing to do: arrays are going to come out the right size
+        layer.pad_next_eps .= layer_above.eps_l
     end
 
     layer.normalization_gradf(layer) # either noop or batchnorm_grad!
@@ -451,17 +446,13 @@ function layer_backward!(layer::ConvLayer, layer_above, n_samples)
         end
     end
 
-    # @show size(layer.eps_l)
-
     # compute gradients
     compute_grad_weight!(layer, n_samples)
 
     # Compute bias gradients
-    if layer.dobias   
-        @inbounds for oc = axes(layer.eps_l, 3) # the channels axis
+    layer.dobias && @inbounds for oc = axes(layer.eps_l, 3) # the channels axis
             @views layer.grad_bias[oc] = sum(layer.eps_l[:, :, oc, :]) .* (1.0 / Float64(n_samples))
         end
-    end
 
     return     # nothing
 end
@@ -587,7 +578,7 @@ end
 function layer_backward!(layer::FlattenLayer, layer_above::LinearLayer, batch_size)
     # Use pre-allocated dl_dflat array for matrix multiplication
     mul!(layer.dl_dflat, layer_above.weight', layer_above.eps_l)  # in-place matrix multiplication
-    
+
     # Reshape in-place using explicit indexing
     h, w, ch, _ = size(layer.eps_l)
     @inbounds for b in 1:batch_size
@@ -646,9 +637,9 @@ function layer_backward!(layer::LinearLayer, layer_above::LinearLayer, n_samples
 
     # Compute bias gradient efficiently without allocations
     if layer.dobias
-        fill!(layer.grad_bias, 0.0)  
-        for j in axes(layer.eps_l, 2)  
-            for i in axes(layer.eps_l, 1)  
+        fill!(layer.grad_bias, 0.0)
+        for j in axes(layer.eps_l, 2)
+            for i in axes(layer.eps_l, 1)
                 layer.grad_bias[i] += layer.eps_l[i, j]
             end
         end
@@ -665,45 +656,42 @@ end
 
 function batchnorm!(layer::LinearLayer)
     bn = layer.normparams
-    
+
     if bn.istraining
         bn.mu .= mean(layer.z, dims=2)          # use in backprop
         bn.stddev .= std(layer.z, dims=2)
 
-
-        # @show size(bn.mu)
-        # @show size(bn.stddev)
-        # @show size(layer.z_norm)
-
-        layer.z_norm .= (layer.z .- bn.mu) ./ (bn.stddev .+ 1e-12) # normalized: often xhat or zhat  
-        layer.z .= layer.z_norm .* bn.gam .+ bn.bet  # shift & scale: often called y 
-        bn.mu_run .= bn.mu_run[1] == 0.0 ? bn.mu :  0.95 .* bn.mu_run .+ 0.05 .* bn.mu
+        layer.z_norm .= (layer.z .- bn.mu) ./ (bn.stddev .+ 1e-12) # normalized: often xhat or zhat
+        layer.z .= layer.z_norm .* bn.gam .+ bn.bet  # shift & scale: often called y
+        bn.mu_run .= bn.mu_run[1] == 0.0 ? bn.mu : 0.95 .* bn.mu_run .+ 0.05 .* bn.mu
         bn.std_run .= bn.std_run[1] == 0.0 ? bn.stddev : 0.95 .* bn.std_run + 0.05 .* bn.stddev
     else  # inference or prediction: use running mean and stddev
-        layer.z_norm .= (layer.z .- bn.mu_run) ./ (bn.std_run .+ 1e-12) # normalized: aka xhat or zhat 
-        layer.z .= layer.z_norm .* bn.gam .+ bn.bet  # shift & scale: often called y 
+        layer.z_norm .= (layer.z .- bn.mu_run) ./ (bn.std_run .+ 1e-12) # normalized: aka xhat or zhat
+        layer.z .= layer.z_norm .* bn.gam .+ bn.bet  # shift & scale: often called y
     end
     return
 end
 
 function batchnorm!(layer::ConvLayer)
     bn = layer.normparams
-    c = size(layer.z,3)
+    c = size(layer.z, 3)
+    # z_norm is already 2D so no need to reshape
 
-    if bn.istraining
+    if bn.istraining   # channel index. channel of z, channel of z_norm as views of underlying arrays
+        @inbounds @fastmath for (cidx, ch_z, ch_z_norm) in zip(1:c, eachslice(layer.z, dims=3), eachslice(layer.z_norm, dims=3))
+            bn.mu[cidx] = mean(ch_z)  # mean of every pixel in the channel so its h*w*n
+            bn.stddev[cidx] = std(ch_z, corrected=false)  # std(layer.z, dims=(1,2,4), corrected=false)
+            @. ch_z_norm = (ch_z - bn.mu[cidx]) / (bn.stddev[cidx] + 1e-12) # normalized: often xhat or zhat
+            @. ch_z = ch_z_norm * bn.gam[cidx] + bn.bet[cidx]  # shift & scale: often called y
+        end
 
-        # @show size(bn.mu)
-        # @show size(layer.z)
-
-        bn.mu .= mean(layer.z, dims=(1,2,4))  # reshape(mean(layer.z, dims=(1,2,4)), c)        # use in backprop
-        bn.stddev .= std(layer.z, dims=(1,2,4), corrected=false)  # reshape(std(layer.z, dims=(1,2,4), corrected=false), c)
-        @. layer.z_norm = (layer.z - bn.mu) / (bn.stddev + 1e-12) # normalized: often xhat or zhat  
-        @. layer.z = layer.z_norm * bn.gam + bn.bet  # shift & scale: often called y 
-        bn.mu_run .= bn.mu_run[1] == 0.0 ? bn.mu :  0.95 .* bn.mu_run .+ 0.05 .* bn.mu
-        bn.std_run .= bn.std_run[1] == 0.0 ? bn.stddev : 0.95 .* bn.std_run + 0.05 .* bn.stddev
+        bn.mu_run .= ifelse(bn.mu_run[1] == 0.0, bn.mu, 0.95 .* bn.mu_run .+ 0.05 .* bn.mu)
+        bn.std_run .= ifelse(bn.std_run[1] == 0.0, bn.stddev, 0.95 .* bn.std_run + 0.05 .* bn.stddev)
     else
-        layer.z_norm .= (layer.z .- bn.mu_run) ./ (bn.std_run .+ 1e-12) # normalized: aka xhat or zhat 
-        layer.z .= layer.z_norm .* bn.gam .+ bn.bet  # shift & scale: often called y 
+        @inbounds @fastmath for (cidx, ch_z, ch_z_norm) in zip(1:c, eachslice(layer.z, dims=3), eachslice(layer.z_norm, dims=3))
+            @. ch_z_norm = (ch_z - bn.mu_run[cidx]) / (bn.std_run[cidx] + 1e-12) # normalized: aka xhat or zhat
+            @. ch_z = ch_z_norm * bn.gam[cidx] + bn.bet[cidx]  # shift & scale: often called y
+        end
     end
     return
 end
@@ -718,24 +706,29 @@ function batchnorm_grad!(layer::LinearLayer)
 
     layer.eps_l .= bn.gam .* layer.eps_l  # often called delta_z_norm at this stage
     # often called delta_z, dx, dout, or dy
-    layer.eps_l .= ((1.0 / mb) .* (1.0 ./ (bn.stddev .+ 1e-12))  .* 
-            (mb .* layer.eps_l .- sum(layer.eps_l, dims=2) .-
-                layer.z_norm .* sum(layer.eps_l .* layer.z_norm, dims=2)))   # replace with non-allocating approach
+    layer.eps_l .= ((1.0 / mb) .* (1.0 ./ (bn.stddev .+ 1e-12)) .*
+                    (mb .* layer.eps_l .- sum(layer.eps_l, dims=2) .-
+                    layer.z_norm .* sum(layer.eps_l .* layer.z_norm, dims=2)))   # replace with non-allocating approach
 end
 
-function batchnorm_grad!(layer::ConvLayer, layer_above::Layer)
+function batchnorm_grad!(layer::ConvLayer)
     bn = layer.normparams
-    mb = size(layer.eps_l, 2)
+    (_, _, c, mb) = size(layer.pad_next_eps)
 
-    bn.delta_bet .= sum(layer.eps_l, dims=(1,2,4)) ./ mb
-    bn.delta_gam .= sum(layer.eps_l .* layer.z_norm, dims=(1,2,4)) ./ mb
+    # @show mb
+    # @show size(bn.delta_bet)
+    # @show size(layer.pad_next_eps)
 
-    @. layer.eps_l = bn.gam * layer.eps_l  # often called delta_z_norm at this stage
+    bn.delta_bet .= reshape(sum(layer.pad_next_eps, dims=(1, 2, 4)),c) ./ mb
+    bn.delta_gam .= reshape(sum(layer.pad_next_eps .* layer.z_norm, dims=(1, 2, 4)), c) ./ mb
+
+    for (cidx, ch_z, ch_z_norm) in zip(1:c, eachslice(layer.pad_next_eps, dims=3), eachslice(layer.z_norm,dims=3))
+        @. ch_z = bn.gam[cidx] * ch_z  # often called delta_z_norm at this stage
     
-    layer.eps_l .= ((1.0 / mb) .* (1.0 ./ (bn.stddev .+ 1e-12))  .*   # often called delta_z, dx, dout, or dy
-            (mb .* layer.eps_l .- sum(layer.eps_l, dims=(1,2,4)) .-
-                layer.z_norm .* sum(layer.eps_l .* layer.z_norm, dims=(1,2,4))))   # replace with non-allocating approach
-end 
+        @. ch_z = ((1.0 / mb) * (1.0 / (bn.stddev[cidx] + 1e-12)) *   # often called delta_z, dx, dout, or dy
+                    (mb * ch_z - sum(ch_z) - ch_z_norm * sum(ch_z * ch_z_norm)))   
+    end
+end
 
 # =====================
 # activation functions
@@ -793,14 +786,14 @@ function softmax!(layer, adj=0.0) # adj arg required for calling loop: not used
                 max_val = layer.z[i, c]
             end
         end
-        
+
         # Compute exp and sum in one pass
         sum_exp = 0.0
         for i in axes(layer.z, 1)
             layer.a[i, c] = exp(layer.z[i, c] - max_val)
             sum_exp += layer.a[i, c]
         end
-        
+
         # Normalize
         sum_exp = sum_exp + 1e-12  # Add epsilon for numerical stability
         for i in axes(layer.z, 1)
@@ -811,7 +804,7 @@ function softmax!(layer, adj=0.0) # adj arg required for calling loop: not used
 end
 
 function logistic!(layer, adj=0.0)
-    @fastmath layer.a .= 1.0 ./ (1.0 .+ exp.(.-layer.z))  
+    @fastmath layer.a .= 1.0 ./ (1.0 .+ exp.(.-layer.z))
 end
 
 function regression!(layer, adj=0.0)

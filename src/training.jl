@@ -290,7 +290,7 @@ function simple_update!(layer::Layer, hp)
     end
 
     # Separate loop for bias
-    @inbounds for i in eachindex(layer.bias)
+    layer.dobias && @inbounds for i in eachindex(layer.bias)
         layer.bias[i] -= hp.lr * layer.grad_bias[i]
     end
 end
@@ -307,7 +307,7 @@ function reg_L1_update!(layer::Layer, hp)
     end
 
     # Separate loop for bias with no regularization
-    @inbounds for i in eachindex(layer.bias)
+    layer.dobias && @inbounds for i in eachindex(layer.bias)
         layer.bias[i] -= hp.lr * layer.grad_bias[i]
     end
 end
@@ -318,18 +318,23 @@ function reg_L2_update!(layer::Layer, hp)
     end
 
     # Separate loop for bias with no regularization
-    @inbounds for i in eachindex(layer.bias)
+    layer.dobias && @inbounds for i in eachindex(layer.bias)
         layer.bias[i] -= hp.lr * layer.grad_bias[i]
     end
 end
 
 
 function update_weight_loop!(layers::Vector{<:Layer}, hp)
-    @views for lr in layers[begin+1:end]
+    for lr in layers[begin+1:end]
         if (typeof(lr) == FlattenLayer) | (typeof(lr) == MaxPoolLayer)
             continue  # redundant but obvious
         end
         hp.weight_update_f!(lr, hp)
+
+        if lr.normparams isa BatchNorm  # test if the field is a struct of type BatchNorms
+            update_batchnorm!(lr.normparams, hp)
+        end
+
     end
 end
 

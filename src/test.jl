@@ -5,6 +5,14 @@ using BenchmarkTools
 using LinearAlgebra
 
 
+function slicemean!(arr_norm::AbstractArray, arr::AbstractArray, mu::AbstractVector, stddev::AbstractVector)
+    @inbounds @fastmath for (c,ch_z, ch_z_norm) in zip(1:size(arr,3), eachslice(arr,dims=3),eachslice(arr_norm,dims=3)) # enumerate(eachslice(arr, dims=3, drop=true))
+        mu[c] = mean(ch_z)
+        stddev[c] = std(ch_z, corrected=false)
+        @. ch_z_norm = (ch_z - mu[c]) / (stddev[c] + 1e-12)
+    end
+    return  # (mu=mu, stddev=stddev, z_norm=arr_norm)
+end
 
 function fastmu!(mu, x; dim)
     cnt = length(x) / size(x,dim)
