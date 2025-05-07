@@ -35,6 +35,7 @@ export
     allocate_layers, 
     setup_preds,
     prediction,
+    minibatch_prediction,
     train_loop!,
     prediction,
     display_mnist_digit,

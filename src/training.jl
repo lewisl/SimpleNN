@@ -1,15 +1,11 @@
 #=
 TODO
 - test ConvLayer with no padding
-- why don't we do implicit flatten when conv precedes linear?
 - best way to set input layer type: flat or image
 - best way to set output layer type: softmax, single, multi, regression?
 
+- implement ADAM and momentum
 - test regression
-- add batch normalization
-
-- add ADAM optimization of learning
-
 
 =#
 
@@ -124,7 +120,6 @@ function allocate_layers(lsvec::Vector{LayerSpec}, n_samples)
             push!(layerdat, MaxPoolLayer(lr, layerdat[idx-1], n_samples))
         elseif lr.kind == :flatten
             push!(layerdat, FlattenLayer(lr, layerdat[idx-1], n_samples))
-        elseif lr.kind == :batchnorm
         else
             error("Found unrecognized layer kind")
         end
@@ -182,12 +177,21 @@ function find_max_idx(arr::AbstractVector)
     return max_idx
 end
 
+function accuracy_count(preds, targets)
+    (correct_count, total_samples) =_accuracy_base(preds, targets, true)
+end
+
 function accuracy(preds, targets)
+    (correct_count, total_samples) =_accuracy_base(preds, targets)
+    correct_count / total_samples
+end
+
+function _accuracy_base(preds, targets, onlycount=false)
     # non-allocating version of accuracy without using argmax
     if size(targets, 1) > 1
         # Multi-class classification
         correct_count = 0
-        total_samples = size(preds, 2)  # Assuming column-major layout (samples in columns)
+        total_samples = size(preds, 2)  # Assuming column-major layout (examples are columns; rows are features of an example)
 
         @inbounds for sample in 1:total_samples
             @views target_max_idx = find_max_idx(targets[:,sample])
@@ -198,8 +202,8 @@ function accuracy(preds, targets)
                 correct_count += 1
             end
         end
-
-        return correct_count / total_samples
+        return correct_count, total_samples
+        
     else
         # Binary classification
         correct_count = 0
@@ -209,8 +213,7 @@ function accuracy(preds, targets)
             is_correct = (preds[i] > 0.5) == (targets[i] > 0.5)
             correct_count += is_correct ? 1 : 0
         end
-
-        return correct_count / total_samples
+        return correct_count, total_samples
     end
 end
 
@@ -253,7 +256,7 @@ end
 # ============================
 
 function feedforward!(layers::Vector{<:Layer}, x, n_samples)
-    layers[begin].a = x
+    layers[begin].a .= x
     @inbounds for (i, lr) in zip(2:length(layers), layers[2:end])  # assumes that layers[1] MUST be input layer without checking!
         # dispatch on type of lr
         layer_forward!(lr, (layers[i-1].a), n_samples)
@@ -394,16 +397,16 @@ end
 
 
 """
-    gather_stats!(StatSeries, layers, y_train, counter, batno, epoch; to_console=true, to_series=true)
+    gather_stats!(stat_series, layers, y_train, counter, batno, epoch; to_console=true, to_series=true)
 
-During each training loop, add loss and accuracy to StatSeries for each batch trained.
+During each training loop, add loss and accuracy to stat_series for each batch trained.
 """
-function gather_stats!(StatSeries, layers, y_train, counter, batno, epoch; to_console=true, to_series=true)
-    cost = cross_entropy_cost((layers[end].a), y_train, (StatSeries.minibatch_size))
+function gather_stats!(stat_series, layers, y_train, counter, batno, epoch; to_console=true, to_series=true)
+    cost = cross_entropy_cost((layers[end].a), y_train, (stat_series.minibatch_size))
     acc = accuracy((layers[end].a), y_train)
     if to_series
-        StatSeries.cost[counter] = cost
-        StatSeries.acc[counter] = acc
+        stat_series.cost[counter] = cost
+        stat_series.acc[counter] = acc
     end
 
     if to_console
@@ -417,16 +420,62 @@ function plot_stats(stats)
     plot!(twinx(), stats.loss, label="Cost", ylabel="Loss", color=:red)
 end
 
+function minibatch_prediction(layers::Vector{Layer}; x, y, minibatch_size=0, costfunc = cross_entropy_cost)
+    (out,full_batch) = size(y)
+
+    # setup minibatches
+    if minibatch_size == 0
+        # setup noop minibatch parameters
+        mini_num = 1
+        n_samples = full_batch
+    else
+        if rem(full_batch, minibatch_size) != 0
+            error("minibatch_size does not divide evenly into batch_size")
+        else
+            mini_num = div(full_batch, minibatch_size)
+            n_samples = minibatch_size
+        end
+    end
+
+    total_correct = 0
+    total_cnt = 0
+    total_cost = 0
+    # pre-allocate outcomes for use in loop
+    preds = zeros(out,n_samples)
+    targets = zeros(out, n_samples)
+
+    for batno in 1:mini_num
+        if mini_num > 1
+            start_obs = (batno - 1) * minibatch_size + 1
+            end_obs = start_obs + minibatch_size - 1
+            x_part = view(x, :, :, :, start_obs:end_obs)
+            y_part = view(y, :, start_obs:end_obs)
+        else
+            x_part = x
+            y_part = y
+        end
+
+        feedforward!(layers, x_part, n_samples)
+
+        # stats per batch: can't use x_part because that is input, layer 1
+        @views preds .= layers[end].a
+        targets .= y_part
+
+        (correct_count, total_samples) = accuracy_count(preds, targets)
+        cost = costfunc(preds, targets, n_samples)
+        total_correct += correct_count
+        total_cnt += total_samples
+        total_cost += cost
+    end
+
+    return total_correct/total_cnt, total_cost/mini_num
+end
 
 function prediction(predlayers::Vector{<:Layer}, x_input, y_input)
     n_samples = size(x_input, ndims(x_input))
     feedforward!(predlayers, x_input, n_samples)
     preds = predlayers[end].a
     acc = accuracy(preds, y_input)
-
-    @show size(preds)
-    @show size(y_input)
-
     cost = cross_entropy_cost(preds, y_input, n_samples)
     println("Accuracy $acc  Cost $cost")
 end

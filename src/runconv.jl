@@ -54,7 +54,7 @@ preptest = true
 full_batch = 60_000
 minibatch_size = 50
 epochs = 10  # 15 epochs yields near perfect training convergence
-layerspecs = one_conv
+layerspecs = two_linear
 
 hp = HyperParameters(lr=0.1, reg=:L2, regparm=0.0004, do_stats=false)  # reg=:L2, regparm=0.002
 
@@ -78,19 +78,19 @@ stats = train_loop!(layers; x=x_train, y=y_train, full_batch=full_batch,
 
 # %%  predict with full training set
 
-predlayerstrain = setup_preds(layerspecs, layers, full_batch);
-prediction(predlayerstrain, x_train, y_train)
+predlayerstrain = setup_preds(layerspecs, layers, minibatch_size);
+minibatch_prediction(predlayerstrain, x=x_train, y=y_train, minibatch_size=minibatch_size)
 
 # %% predict with testset
 
-predlayerstest = setup_preds(layerspecs, layers, testsize);
-prediction(predlayerstest, x_test, y_test)
+predlayerstest = setup_preds(layerspecs, layers, minibatch_size);
+minibatch_prediction(predlayerstest, x=x_test, y=y_test, minibatch_size=minibatch_size)
 
 # %% predict a single example
 
 samplenumber = 20;
 
-pred1layers = Convolution.setup_preds(layerspecs, layers, 1);
+pred1layers = setup_preds(layerspecs, layers, 1);
 
 x_single = x_train[:, :, :, samplenumber];
 x_single = reshape(x_single, 28, 28, 1, 1);

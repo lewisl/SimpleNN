@@ -1,11 +1,3 @@
-#=
-- fix batch normalization for conv networks
-- can we do batch prediction? 
-- or other means to speed up full batch prediction and use less memory
-
-=#
-
-
 # ============================
 # abstract types for layer and normparams
 # ============================
@@ -711,22 +703,35 @@ function batchnorm_grad!(layer::LinearLayer)
                     layer.z_norm .* sum(layer.eps_l .* layer.z_norm, dims=2)))   # replace with non-allocating approach
 end
 
+
 function batchnorm_grad!(layer::ConvLayer)
     bn = layer.normparams
     (_, _, c, mb) = size(layer.pad_next_eps)
 
-    # @show mb
-    # @show size(bn.delta_bet)
-    # @show size(layer.pad_next_eps)
-
+    # Compute gradients for beta and gamma
     bn.delta_bet .= reshape(sum(layer.pad_next_eps, dims=(1, 2, 4)),c) ./ mb
     bn.delta_gam .= reshape(sum(layer.pad_next_eps .* layer.z_norm, dims=(1, 2, 4)), c) ./ mb
 
-    for (cidx, ch_z, ch_z_norm) in zip(1:c, eachslice(layer.pad_next_eps, dims=3), eachslice(layer.z_norm,dims=3))
-        @. ch_z = bn.gam[cidx] * ch_z  # often called delta_z_norm at this stage
-    
-        @. ch_z = ((1.0 / mb) * (1.0 / (bn.stddev[cidx] + 1e-12)) *   # often called delta_z, dx, dout, or dy
-                    (mb * ch_z - sum(ch_z) - ch_z_norm * sum(ch_z * ch_z_norm)))   
+    @inbounds @fastmath for (cidx, ch_z, ch_z_norm) in zip(1:c, eachslice(layer.pad_next_eps, dims=3), eachslice(layer.z_norm,dims=3))
+        # Step 1: Scale by gamma (delta_z_norm)
+        @. ch_z = bn.gam[cidx] * ch_z
+        
+        # Step 2: Compute statistics needed for gradient
+        # - sum of delta_z_norm
+        # - sum of delta_z_norm * z_norm
+        ch_sum = 0.0
+        ch_prod_sum = 0.0
+        for i in eachindex(ch_z)
+            ch_sum += ch_z[i]
+            ch_prod_sum += ch_z[i] * ch_z_norm[i]
+        end
+        
+        # Step 3: Compute final gradient (delta_z)
+        # Formula: (1/mb) * (1/stddev) * (mb*delta_z_norm - sum(delta_z_norm) - z_norm*sum(delta_z_norm*z_norm))
+        scale = (1.0 / mb) / (bn.stddev[cidx] + 1e-12)
+        for i in eachindex(ch_z)
+            ch_z[i] = scale * (mb * ch_z[i] - ch_sum - ch_z_norm[i] * ch_prod_sum)
+        end
     end
 end
 
