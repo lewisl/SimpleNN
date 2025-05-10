@@ -12,16 +12,16 @@ include("training.jl")
 include("mnist_fun.jl")
 
 # data structures for neural network
-export 
+export
     LayerSpec,
-    ConvLayer, 
-    LinearLayer, 
-    FlattenLayer, 
+    ConvLayer,
+    LinearLayer,
+    FlattenLayer,
     MaxPoolLayer,
     HyperParameters
 
 # creating layerspecs to define a model
-export 
+export
     LayerSpec,          # constructor for a specification of any type of layer
     convlayerspec,      # constructor with only inputs needed for a convolutional layer
     linearlayerspec,    # constructor with only inputs needed for a linear layer
@@ -29,10 +29,10 @@ export
     maxpoollayerspec    # constructor with only inputs needed for a maxpooling layer
 
 # functions you can use
-export 
+export
     setup_train,
     setup_mnist,
-    allocate_layers, 
+    allocate_layers,
     setup_preds,
     prediction,
     minibatch_prediction,

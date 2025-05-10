@@ -56,7 +56,7 @@ Results:
 > Training: Accuracy 0.9893666666666666  Cost 0.08542955219525523
 > Test: Accuracy 0.9809  Cost 0.1166747099312071
 
-#### one_conv 10 epochs
+#### one_conv 10 epochs without batch normalization for the conv layer
 
 Model:
 ```julia
@@ -149,7 +149,7 @@ Results:
 > Training: Accuracy 0.9982  Cost 0.02208198240164045
 > Test: Accuracy 0.9815  Cost 0.10239645963369148
 
-#### one_conv 10 epochs
+#### one_conv 10 epochs with batch normalization
 
 Model:
 ```julia
@@ -176,4 +176,32 @@ hp = HyperParameters(lr=0.1, reg=:L2, regparm=0.0004, do_stats=false)
 
 Results:
 > Training:
-> Test: Accuracy 0.9859  Cost 0.08455229387921524
+> Test: Accuracy 0.9854  Cost 0.08455229387921524
+
+#### three_linear 20 epochs with batch normalization
+Model:
+```julia
+three_linear = LayerSpec[
+    LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
+    flattenlayerspec(name=:flatten)
+    linearlayerspec(name=:linear1, output=300, normalization=:batchnorm)
+    linearlayerspec(name=:linear2, output=300, normalization=:batchnorm)
+    linearlayerspec(name=:linear3, output=300, normalization=:batchnorm)
+    LayerSpec(h=10, kind=:linear, name=:output, activation=:softmax)
+];
+```
+
+Hyperparameters
+```julia
+preptest = true
+full_batch = 60_000
+minibatch_size = 50
+epochs = 20  # 15 epochs yields near perfect training convergence
+layerspecs = three_linear
+
+hp = HyperParameters(lr=0.1, reg=:L2, regparm=0.00043, do_stats=false)
+```
+
+Results:
+> Training: Accuracy 0.9993166666666666 Cost 0.005766895445629323
+> Test: 0.9817 Cost 0.11920180572947686

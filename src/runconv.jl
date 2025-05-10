@@ -1,5 +1,6 @@
 # %% packages and inputs
 
+
 using Convolution
 
 
@@ -43,9 +44,9 @@ two_linear = LayerSpec[
 three_linear = LayerSpec[
     LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
     flattenlayerspec(name=:flatten)
-    linearlayerspec(name=:linear1, output=256)
-    linearlayerspec(name=:linear1, output=256)
-    linearlayerspec(name=:linear2, output=256)
+    linearlayerspec(name=:linear1, output=300, normalization=:batchnorm)
+    linearlayerspec(name=:linear2, output=300, normalization=:batchnorm)
+    linearlayerspec(name=:linear3, output=300, normalization=:batchnorm)
     LayerSpec(h=10, kind=:linear, name=:output, activation=:softmax)
 ];
 
@@ -53,10 +54,10 @@ three_linear = LayerSpec[
 preptest = true
 full_batch = 60_000
 minibatch_size = 50
-epochs = 10  # 15 epochs yields near perfect training convergence
-layerspecs = two_linear
+epochs = 20  # 15 epochs yields near perfect training convergence
+layerspecs = three_linear
 
-hp = HyperParameters(lr=0.1, reg=:L2, regparm=0.0004, do_stats=false)  # reg=:L2, regparm=0.002
+hp = HyperParameters(lr=0.1, reg=:L2, regparm=0.00043, do_stats=false)  # reg=:L2, regparm=0.002
 
 # %%
 
@@ -79,12 +80,21 @@ stats = train_loop!(layers; x=x_train, y=y_train, full_batch=full_batch,
 # %%  predict with full training set
 
 predlayerstrain = setup_preds(layerspecs, layers, minibatch_size);
-minibatch_prediction(predlayerstrain, x=x_train, y=y_train, minibatch_size=minibatch_size)
+minibatch_prediction(predlayerstrain, x_train, y_train)
 
 # %% predict with testset
 
 predlayerstest = setup_preds(layerspecs, layers, minibatch_size);
-minibatch_prediction(predlayerstest, x=x_test, y=y_test, minibatch_size=minibatch_size)
+minibatch_prediction(predlayerstest, x_test, y_test)
+
+
+
+
+# %% full batch prediction on test set, much slower  -- to verify that minibatch_prediction produces same result
+
+predlayerstestfull = setup_preds(layerspecs, layers, testsize)
+prediction(predlayerstestfull, x_test, y_test)
+
 
 # %% predict a single example
 

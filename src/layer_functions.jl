@@ -395,19 +395,15 @@ end
 
 
 function layer_backward!(layer::ConvLayer, layer_above, n_samples)
-    f_h, f_w, _, _ = size(layer.weight)
+    f_h, f_w, ic, oc = size(layer.weight)
     H_out, W_out, _, _ = size(layer.eps_l)
 
     fill!(layer.grad_weight, 0.0)  # reinitialization to allow accumulation of convolutions
     fill!(layer.eps_l, 0.0)
     fill!(layer.grad_a, 0.0)
+    sample_count_inverse =  1.0 / Float64(n_samples)
 
     layer.activation_gradf(layer)
-
-    # @show size(layer_above.eps_l)
-    # @show size(layer.pad_next_eps)
-    # @show size(layer.grad_a)
-    # @show size(layer.eps_l)
 
     layer_above.eps_l .*= layer.grad_a
 
@@ -441,16 +437,22 @@ function layer_backward!(layer::ConvLayer, layer_above, n_samples)
     # compute gradients
     compute_grad_weight!(layer, n_samples)
 
-    # Compute bias gradients
-    layer.dobias && @inbounds for oc = axes(layer.eps_l, 3) # the channels axis
-            @views layer.grad_bias[oc] = sum(layer.eps_l[:, :, oc, :]) .* (1.0 / Float64(n_samples))
-        end
+    # compute bias gradient
+    # if layer.dobias
+    #     @inbounds @fastmath for oc in axes(layer.grad_bias,1)
+    #         layer.grad_bias[oc] = sum(@view layer_above.eps_l[:, :, oc, :]) * sample_count_inverse
+    #     end
+    # end
+
+    # layer.dobias && layer.grad_bias .= dropdims(sum(layer_above.eps_l, dims=(1,2,4)), dims=(1,2,4))  <-- doesn't work reliably
+    layer.dobias && reshape(sum(layer_above.eps_l, dims=(1, 2, 4)),c)  .* inverse_mb_size
 
     return     # nothing
 end
 
 function compute_grad_weight!(layer, n_samples)
     H_out, W_out, _, _ = size(layer.eps_l)
+    sample_count_inverse = 1.0 / Float64(n_samples)
 
     # Initialize grad_weight to zero
     fill!(layer.grad_weight, 0.0) # no allocations; faster than assignment
@@ -481,7 +483,7 @@ function compute_grad_weight!(layer, n_samples)
     end
 
     # Average over batch (divide by batch_size)
-    layer.grad_weight .*= (1 / n_samples)
+    layer.grad_weight .*= sample_count_inverse
     return   # nothing
 end
 
@@ -612,6 +614,7 @@ function layer_forward!(layer::LinearLayer, x::Matrix{Float64}, batch_size)
 end
 
 function layer_backward!(layer::LinearLayer, layer_above::LinearLayer, n_samples; output=false)
+    inverse_n_samples = 1.0 / Float64(n_samples)
     if output
         # layer.eps_l calculated by prior call to dloss_dz
         mul!(layer.grad_weight, layer.eps_l, layer.a_below')  # in-place matrix multiplication
@@ -635,7 +638,7 @@ function layer_backward!(layer::LinearLayer, layer_above::LinearLayer, n_samples
                 layer.grad_bias[i] += layer.eps_l[i, j]
             end
         end
-        layer.grad_bias .*= (1.0 / n_samples)  # in-place scaling
+        layer.grad_bias .*= inverse_n_samples  # in-place scaling
     end
     return     # nothing
 end
@@ -650,14 +653,14 @@ function batchnorm!(layer::LinearLayer)
     bn = layer.normparams
 
     if bn.istraining
-        bn.mu .= mean(layer.z, dims=2)          # use in backprop
+        mean!(bn.mu, layer.z)
         bn.stddev .= std(layer.z, dims=2)
 
         layer.z_norm .= (layer.z .- bn.mu) ./ (bn.stddev .+ 1e-12) # normalized: often xhat or zhat
         layer.z .= layer.z_norm .* bn.gam .+ bn.bet  # shift & scale: often called y
         bn.mu_run .= bn.mu_run[1] == 0.0 ? bn.mu : 0.95 .* bn.mu_run .+ 0.05 .* bn.mu
         bn.std_run .= bn.std_run[1] == 0.0 ? bn.stddev : 0.95 .* bn.std_run + 0.05 .* bn.stddev
-    else  # inference or prediction: use running mean and stddev
+    else  # prediction: use running mean and stddev
         layer.z_norm .= (layer.z .- bn.mu_run) ./ (bn.std_run .+ 1e-12) # normalized: aka xhat or zhat
         layer.z .= layer.z_norm .* bn.gam .+ bn.bet  # shift & scale: often called y
     end
@@ -667,22 +670,29 @@ end
 function batchnorm!(layer::ConvLayer)
     bn = layer.normparams
     c = size(layer.z, 3)
-    # z_norm is already 2D so no need to reshape
-
-    if bn.istraining   # channel index. channel of z, channel of z_norm as views of underlying arrays
+    if bn.istraining
         @inbounds @fastmath for (cidx, ch_z, ch_z_norm) in zip(1:c, eachslice(layer.z, dims=3), eachslice(layer.z_norm, dims=3))
-            bn.mu[cidx] = mean(ch_z)  # mean of every pixel in the channel so its h*w*n
-            bn.stddev[cidx] = std(ch_z, corrected=false)  # std(layer.z, dims=(1,2,4), corrected=false)
-            @. ch_z_norm = (ch_z - bn.mu[cidx]) / (bn.stddev[cidx] + 1e-12) # normalized: often xhat or zhat
-            @. ch_z = ch_z_norm * bn.gam[cidx] + bn.bet[cidx]  # shift & scale: often called y
+            # Compute statistics
+            bn.mu[cidx] = mean(ch_z)
+            bn.stddev[cidx] = std(ch_z, corrected=false)
+
+            # Pre-compute inverse std for efficiency
+            inv_std = 1.0 / (bn.stddev[cidx] + 1e-12)
+
+            @. ch_z_norm = (ch_z - bn.mu[cidx]) * inv_std
+            @. ch_z = ch_z_norm * bn.gam[cidx] + bn.bet[cidx]
         end
 
+        # Update running statistics
         bn.mu_run .= ifelse(bn.mu_run[1] == 0.0, bn.mu, 0.95 .* bn.mu_run .+ 0.05 .* bn.mu)
         bn.std_run .= ifelse(bn.std_run[1] == 0.0, bn.stddev, 0.95 .* bn.std_run + 0.05 .* bn.stddev)
     else
         @inbounds @fastmath for (cidx, ch_z, ch_z_norm) in zip(1:c, eachslice(layer.z, dims=3), eachslice(layer.z_norm, dims=3))
-            @. ch_z_norm = (ch_z - bn.mu_run[cidx]) / (bn.std_run[cidx] + 1e-12) # normalized: aka xhat or zhat
-            @. ch_z = ch_z_norm * bn.gam[cidx] + bn.bet[cidx]  # shift & scale: often called y
+            # Pre-compute inverse std for efficiency
+            inv_std = 1.0 / (bn.std_run[cidx] + 1e-12)
+
+            @. ch_z_norm = (ch_z - bn.mu_run[cidx]) * inv_std
+            @. ch_z = ch_z_norm * bn.gam[cidx] + bn.bet[cidx]
         end
     end
     return
@@ -692,13 +702,14 @@ end
 function batchnorm_grad!(layer::LinearLayer)
     bn = layer.normparams
     mb = size(layer.eps_l, 2)
+    inverse_mb_size = 1.0 / Float64(mb)
 
-    bn.delta_bet .= sum(layer.eps_l, dims=2) ./ mb
-    bn.delta_gam .= sum(layer.eps_l .* layer.z_norm, dims=2) ./ mb
+    bn.delta_bet .= sum(layer.eps_l, dims=2) .* inverse_mb_size  # ./ mb
+    bn.delta_gam .= sum(layer.eps_l .* layer.z_norm, dims=2)  .* inverse_mb_size  # ./ mb
 
     layer.eps_l .= bn.gam .* layer.eps_l  # often called delta_z_norm at this stage
     # often called delta_z, dx, dout, or dy
-    layer.eps_l .= ((1.0 / mb) .* (1.0 ./ (bn.stddev .+ 1e-12)) .*
+    layer.eps_l .= (inverse_mb_size .* (1.0 ./ (bn.stddev .+ 1e-12)) .*
                     (mb .* layer.eps_l .- sum(layer.eps_l, dims=2) .-
                     layer.z_norm .* sum(layer.eps_l .* layer.z_norm, dims=2)))   # replace with non-allocating approach
 end
@@ -707,29 +718,31 @@ end
 function batchnorm_grad!(layer::ConvLayer)
     bn = layer.normparams
     (_, _, c, mb) = size(layer.pad_next_eps)
+    inverse_mb_size = 1.0 / Float64(mb)
+
 
     # Compute gradients for beta and gamma
-    bn.delta_bet .= reshape(sum(layer.pad_next_eps, dims=(1, 2, 4)),c) ./ mb
-    bn.delta_gam .= reshape(sum(layer.pad_next_eps .* layer.z_norm, dims=(1, 2, 4)), c) ./ mb
+    bn.delta_bet .= reshape(sum(layer.pad_next_eps, dims=(1, 2, 4)),c)  .* inverse_mb_size   # ./ mb
+    bn.delta_gam .= reshape(sum(layer.pad_next_eps .* layer.z_norm, dims=(1, 2, 4)), c) .* inverse_mb_size  # ./ mb
 
     @inbounds @fastmath for (cidx, ch_z, ch_z_norm) in zip(1:c, eachslice(layer.pad_next_eps, dims=3), eachslice(layer.z_norm,dims=3))
         # Step 1: Scale by gamma (delta_z_norm)
         @. ch_z = bn.gam[cidx] * ch_z
-        
+
         # Step 2: Compute statistics needed for gradient
         # - sum of delta_z_norm
         # - sum of delta_z_norm * z_norm
         ch_sum = 0.0
         ch_prod_sum = 0.0
-        for i in eachindex(ch_z)
+        @inbounds for i in eachindex(ch_z)
             ch_sum += ch_z[i]
             ch_prod_sum += ch_z[i] * ch_z_norm[i]
         end
-        
+
         # Step 3: Compute final gradient (delta_z)
         # Formula: (1/mb) * (1/stddev) * (mb*delta_z_norm - sum(delta_z_norm) - z_norm*sum(delta_z_norm*z_norm))
         scale = (1.0 / mb) / (bn.stddev[cidx] + 1e-12)
-        for i in eachindex(ch_z)
+        @inbounds for i in eachindex(ch_z)
             ch_z[i] = scale * (mb * ch_z[i] - ch_sum - ch_z_norm[i] * ch_prod_sum)
         end
     end

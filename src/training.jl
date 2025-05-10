@@ -420,8 +420,9 @@ function plot_stats(stats)
     plot!(twinx(), stats.loss, label="Cost", ylabel="Loss", color=:red)
 end
 
-function minibatch_prediction(layers::Vector{Layer}; x, y, minibatch_size=0, costfunc = cross_entropy_cost)
+function minibatch_prediction(layers::Vector{Layer}, x, y, costfunc = cross_entropy_cost)
     (out,full_batch) = size(y)
+    minibatch_size = size(layers[end].a,2)
 
     # setup minibatches
     if minibatch_size == 0
@@ -441,7 +442,7 @@ function minibatch_prediction(layers::Vector{Layer}; x, y, minibatch_size=0, cos
     total_cnt = 0
     total_cost = 0
     # pre-allocate outcomes for use in loop
-    preds = zeros(out,n_samples)
+    preds = zeros(out, n_samples)
     targets = zeros(out, n_samples)
 
     for batno in 1:mini_num
