@@ -22,6 +22,7 @@ Base.@kwdef struct LayerSpec
     kind::Symbol = :none
     activation::Symbol = :none
     normalization::Symbol = :none  # options are :none, :batchnorm
+    optimization::Symbol = :none  # options are :none :adam
     adj::Float64 = 0      # leaky_relu factor. also for he_initialize
     h::Int64 = 0          # image height (rows) or output neurons for linear layers
     w::Int64 = 0          # image width (columns)
@@ -42,12 +43,14 @@ Note that h, w, and inch will be calculated from the previous layer,
 which should be an image input, another conv layer, or a maxpooling layer.
 You must provide inputs for name, activation, outch, f_h, and f_w.
 """
-function convlayerspec(; name::Symbol, activation::Symbol=:relu, normalization::Symbol=:none, adj::Float64=0.002, h::Int64=0, w::Int64=0, outch::Int64, f_h::Int64, f_w::Int64, inch::Int64=0, padrule::Symbol=:same)
-    LayerSpec(name=name, kind=:conv, activation=activation, normalization=normalization, adj=adj, h=h, w=w, outch=outch, f_h=f_h, f_w=f_w, inch=inch, padrule=padrule)
+function convlayerspec(; name::Symbol, activation::Symbol=:relu, normalization::Symbol=:none, optimization::Symbol=:none, 
+        adj::Float64=0.002, h::Int64=0, w::Int64=0, outch::Int64, f_h::Int64, f_w::Int64, inch::Int64=0, padrule::Symbol=:same)
+    LayerSpec(name=name, kind=:conv, activation=activation, normalization=normalization, optimization=optimization, adj=adj, h=h, w=w, outch=outch, f_h=f_h, f_w=f_w, inch=inch, padrule=padrule)
 end
 
-function linearlayerspec(; name::Symbol, activation::Symbol=:relu, normalization::Symbol=:none, adj::Float64=0.002, output::Int64)
-    LayerSpec(name=name, kind=:linear, activation=activation, normalization=normalization, adj=adj, h=output)
+function linearlayerspec(; name::Symbol, activation::Symbol=:relu, normalization::Symbol=:none, optimization::Symbol=:none, 
+        adj::Float64=0.002, output::Int64)
+    LayerSpec(name=name, kind=:linear, activation=activation, normalization=normalization, optimization=optimization, adj=adj, h=output)
 end
 
 function maxpoollayerspec(; name::Symbol, f_h::Int, f_w::Int)
@@ -71,6 +74,7 @@ Base.@kwdef mutable struct ConvLayer <: Layer
     normalizationf::Function = noop
     normalization_gradf::Function = noop
     normparams::NormParam  # = NoNorm()   # initialize to noop that won't allocate
+    optimization::Symbol = :none
     adj::Float64 = 0.0
     weight::Array{Float64,4} = Float64[;;;;]  # (filter_h, filter_w, in_channels, out_channels)
     padrule::Symbol = :same   # other option is :none
@@ -165,6 +169,7 @@ Base.@kwdef mutable struct LinearLayer <: Layer
     normalizationf::Function = noop
     normalization_gradf::Function = noop
     normparams::NormParam = NoNorm()
+    optimization::Symbol = :none
     adj::Float64 = 0.0
     weight::Array{Float64,2} = Float64[;;] # (output_dim, input_dim)
     output_dim::Int64 = 0
@@ -330,10 +335,10 @@ Base.@kwdef mutable struct BatchNorm{T<:AbstractArray,U<:AbstractArray} <: NormP
     delta_gam::T
     delta_bet::T
     # for optimization updates of bn parameters
-    # delta_v_gam::U
-    # delta_s_gam::U
-    # delta_v_bet::U
-    # delta_s_bet::U
+    delta_v_gam::T
+    delta_s_gam::T
+    delta_v_bet::T
+    delta_s_bet::T
     # for standardizing batch values
     mu::T         # mean of z; same size as bias = no. of input layer units
     stddev::T       # std dev of z;   ditto
