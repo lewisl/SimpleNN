@@ -6,6 +6,8 @@ TODO
 
 - implement ADAM and momentum
 - test regression
+- make stats struct immutable
+
 
 =#
 
@@ -157,7 +159,7 @@ function setup_preds(predlayerspecs, layers::Vector{<:Layer}, n_samples)
                 prlr.normparams.bet .= lr.normparams.bet
                 prlr.normparams.mu_run .= lr.normparams.mu_run
                 prlr.normparams.std_run .= lr.normparams.std_run
-                prlr.normparams.istraining = false
+                prlr.normparams.istraining[] = false   # setting value of Ref field (like a 1 element array)
             end
         end
     end
