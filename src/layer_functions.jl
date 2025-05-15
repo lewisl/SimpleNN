@@ -68,30 +68,39 @@ end
 
 
 Base.@kwdef struct ConvLayer <: Layer  # mutable
-    name::Symbol = :noname
-    activationf::Function = relu!
-    activation_gradf::Function = relu_grad!
-    normalizationf::Function = noop
-    normalization_gradf::Function = noop
-    normparams::NormParam  # = NoNorm()   # initialize to noop that won't allocate
-    optimization::Symbol = :none
-    adj::Float64 = 0.0
-    weight::Array{Float64,4} = Float64[;;;;]  # (filter_h, filter_w, in_channels, out_channels)
-    padrule::Symbol = :same   # other option is :none
-    stride::Int64 = 1     # assume stride is symmetrical for now
-    bias::Vector{Float64} = Float64[]    # (out_channels)
-    dobias::Bool = true
+    # data arrays
     z::Array{Float64,4} = Float64[;;;;]
     z_norm::Array{Float64,4} = Float64[;;;;]  # if doing batchnorm: 2d to simplify batchnorm calcs
-    pad_x::Array{Float64,4} = Float64[;;;;]
     a::Array{Float64,4} = Float64[;;;;]
     a_below::Array{Float64,4} = Float64[;;;;]
     pad_a_below::Array{Float64,4} = Float64[;;;;]
     eps_l::Array{Float64,4} = Float64[;;;;]
     pad_next_eps::Array{Float64,4} = Float64[;;;;]  # TODO need to test if this is needed given successive conv layer sizes
     grad_a::Array{Float64,4} = Float64[;;;;]
+    pad_x::Array{Float64,4} = Float64[;;;;]
+
+    # weight arrays
+    weight::Array{Float64,4} = Float64[;;;;]  # (filter_h, filter_w, in_channels, out_channels)
+    bias::Vector{Float64} = Float64[]    # (out_channels)
     grad_weight::Array{Float64,4} = Float64[;;;;]
     grad_bias::Vector{Float64} = Float64[]
+
+    # layer specific functions
+    activationf::Function = relu!
+    activation_gradf::Function = relu_grad!
+    normalizationf::Function = noop
+    normalization_gradf::Function = noop
+
+    # structs of layer specific parameters
+    normparams::NormParam  # = NoNorm()   # initialize to noop that won't allocate
+
+    # scalar parameters
+    name::Symbol = :noname
+    optimization::Symbol = :none
+    adj::Float64 = 0.0
+    padrule::Symbol = :same   # other option is :none
+    stride::Int64 = 1     # assume stride is symmetrical for now
+    dobias::Bool = true
 end
 
 # constructor method to do prep calculations based on LayerSpec inputs, then create a ConvLayer
@@ -119,35 +128,28 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
         else
             error("Only :batchnorm and :none  supported, not $(Symbol(lr.normalization)).")
         end
+
+        if lr.activation == :relu
+            activationf=relu!
+        elseif lr.activation == :leaky_relu
+            activationf=leaky_relu!
+        elseif lr.activation == :none
+            activationf=noop
+        else
+            error("Only :relu, :leaky_relu and :none  supported, not $(Symbol(lr.activation)).")
+        end
+        if lr.activation == :relu
+            activation_gradf=relu_grad!
+        elseif lr.activation == :leaky_relu
+            activation_gradf=leaky_relu_grad!
+        elseif lr.activation == :none
+            activation_gradf=noop
+        else
+            error("Only :relu, :leaky_relu and :none  supported, not $(Symbol(lr.activation)).")
+        end
+
     ConvLayer(
-        name=lr.name,
-        activationf=if lr.activation == :relu
-            relu!
-        elseif lr.activation == :leaky_relu
-            leaky_relu!
-        elseif lr.activation == :none
-            noop
-        else
-            error("Only :relu, :leaky_relu and :none  supported, not $(Symbol(lr.activation)).")
-        end,
-        activation_gradf=if lr.activation == :relu
-            relu_grad!
-        elseif lr.activation == :leaky_relu
-            leaky_relu_grad!
-        elseif lr.activation == :none
-            noop
-        else
-            error("Only :relu, :leaky_relu and :none  supported, not $(Symbol(lr.activation)).")
-        end,
-        normalizationf=normalizationf,
-        normalization_gradf=normalization_gradf,
-        normparams=normparams,
-        adj=lr.adj,
-        weight=he_initialize((lr.f_h, lr.f_w, inch, lr.outch), scale=2.2, adj=lr.adj),
-        padrule=lr.padrule,
-        stride=lr.stride,
-        bias=zeros(outch),
-        dobias=dobias,
+        # data arrays
         pad_x=zeros(out_h + 2pad, out_w + 2pad, inch, n_samples),
         a_below = zeros(prev_h, prev_w, inch, n_samples),
         pad_a_below=zeros(prev_h + 2pad, prev_w + 2pad, inch, n_samples),
@@ -157,45 +159,71 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
         eps_l=zeros(prev_h, prev_w, inch, n_samples),
         grad_a=zeros(out_h, out_w, outch, n_samples),
         pad_next_eps=zeros(prev_h, prev_w, outch, n_samples),
+
+        # weight arrays
+        weight=he_initialize((lr.f_h, lr.f_w, inch, lr.outch), scale=2.2, adj=lr.adj),
+        bias=zeros(outch),
         grad_weight=zeros(lr.f_h, lr.f_w, inch, outch),
         grad_bias=zeros(outch),
+
+        # structs of layer specific parameters
+        normparams=normparams,
+
+        # layer specific functions
+        activationf = activationf,
+        activation_gradf = activation_gradf,
+        normalizationf=normalizationf,
+        normalization_gradf=normalization_gradf,
+
+        # scalar parameters
+        name=lr.name,
+        adj=lr.adj,
+        padrule=lr.padrule,
+        stride=lr.stride,
+        dobias=dobias
     )
 end
 
 
 Base.@kwdef struct LinearLayer <: Layer
-    name::Symbol = :noname
+    # data arrays
+    z::Array{Float64,2} = Float64[;;]       # feed forward linear combination result
+    z_norm::Array{Float64,2} = Float64[;;]  # if doing batchnorm
+    a::Array{Float64,2} = Float64[;;]      # feed forward activation output
+    grad_a::Array{Float64,2} = Float64[;;]  # backprop derivative of activation output
+    a_below::Array{Float64,2} = Float64[;;]
+    eps_l::Array{Float64,2} = Float64[;;]   # backprop error of the layer
+
+
+    # weight arrays
+    weight::Array{Float64,2} = Float64[;;] # (output_dim, input_dim)
+    # output_dim::Int64 = 0
+    # input_dim::Int64 = 0
+    bias::Vector{Float64} = Float64[]     # (output_dim)
+    grad_weight::Array{Float64,2} = Float64[;;]
+    grad_bias::Vector{Float64} = Float64[]
+
+    # structs of layer specific parameters
+    normparams::NormParam = NoNorm()
+
+    # layer specific functions
     activationf::Function = relu!
     activation_gradf::Function = relu_grad!
     normalizationf::Function = noop
     normalization_gradf::Function = noop
-    normparams::NormParam = NoNorm()
+
+    # scalar parameters
+    name::Symbol = :noname
     optimization::Symbol = :none
     adj::Float64 = 0.0
-    weight::Array{Float64,2} = Float64[;;] # (output_dim, input_dim)
-    output_dim::Int64 = 0
-    input_dim::Int64 = 0
-    bias::Vector{Float64} = Float64[]     # (output_dim)
     dobias::Bool = true
-    z::Array{Float64,2} = Float64[;;]       # feed forward linear combination result
-    z_norm::Array{Float64,2} = Float64[;;]  # if doing batchnorm
-    a::Array{Float64,2} = Float64[;;]      # feed forward activation output
-    # ALIAS TO ACTIVATION FROM LOWER BELOW used in backprop, but don't make a copy
-    # type and size don't matter for an alias
-    # we don't need to pre-allocate this. It just simplifies the API
-    # when do we assign this?????  in layer_forward for LinearLayer
-    a_below::Array{Float64,2} = Float64[;;]
-    eps_l::Array{Float64,2} = Float64[;;]   # backprop error of the layer
-    grad_a::Array{Float64,2} = Float64[;;]  # backprop derivative of activation output
-    grad_weight::Array{Float64,2} = Float64[;;]
-    grad_bias::Vector{Float64} = Float64[]
 end
 
 # constructor method to create a LinearLayer with some inputs calculated based on LayerSpec inputs, then
 function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
     # weight dims
     outputs = lr.h        # rows
-    inputs = prevlayer.output_dim    # columns
+    inputs = size(prevlayer.a, 1)    # rows of lower layer output become columns
     if lr.normalization == :batchnorm
             normalizationf = batchnorm!
             normalization_gradf = batchnorm_grad!
@@ -212,51 +240,63 @@ function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
         else
             error("Only :batchnorm and :none  supported, not $(Symbol(lr.normalization)).")
         end
-    LinearLayer(
-        name=lr.name,
-        activationf=if lr.activation == :relu
-            relu!
+        if lr.activation == :relu
+            activationf=relu!
         elseif lr.activation == :leaky_relu
-            leaky_relu!
+            activationf=leaky_relu!
         elseif lr.activation == :none
-            noop
+            activationf=noop
         elseif lr.activation == :softmax
-            softmax!
+            activationf=softmax!
         elseif lr.activation == :logistic   # rarely used any more
-            logistic!
+            activationf=logistic!
         elseif lr.activation == :regression
-            regression!
+            activationf=regression!
         else
             error("Only :relu, :leaky_relu, :softmax and :none  supported, not $(Symbol(lr.activation)).")
-        end,
-        activation_gradf=if lr.activation == :relu  # this has no effect on the output layer, but need it for hidden layers
-            relu_grad!
+        end
+        if lr.activation == :relu  # this has no effect on the output layer, but need it for hidden layers
+            activation_gradf=relu_grad!
         elseif lr.activation == :leaky_relu
-            leaky_relu_grad!
+            activation_gradf=leaky_relu_grad!
         elseif lr.activation == :softmax
-            noop
+            activation_gradf=noop
         elseif lr.activation == :none
-            noop
+            activation_gradf=noop
         else
             error("Only :relu, :leaky_relu, :softmax and :none  supported, not $(Symbol(lr.activation)).")
-        end,
-        normalizationf=normalizationf,
-        normalization_gradf=normalization_gradf,
-        normparams=normparams,
-        adj=lr.adj,
-        weight=he_initialize((outputs, inputs), scale=1.5, adj=lr.adj),
-        output_dim=outputs,
-        input_dim=inputs,
-        bias=zeros(outputs),
-        dobias=dobias,
+        end
+
+
+    LinearLayer(
+        # data arrays
         z=zeros(outputs, n_samples),
         z_norm=ifelse(lr.normalization == :batchnorm, zeros(outputs, n_samples), zeros(0, 0)),
         a=zeros(outputs, n_samples),
         a_below = zeros(inputs, n_samples),
         eps_l=zeros(outputs, n_samples),
         grad_a=zeros(outputs, n_samples),
+
+        # weight arrays
+        weight=he_initialize((outputs, inputs), scale=1.5, adj=lr.adj),
+        bias=zeros(outputs),
         grad_weight=zeros(outputs, inputs),
-        grad_bias=zeros(outputs))
+        grad_bias=zeros(outputs),
+
+        # structs of layer specific parameters
+        normparams=normparams,
+
+        # layer specific functions
+        activationf = activationf,
+        activation_gradf = activation_gradf,
+        normalizationf=normalizationf,
+        normalization_gradf=normalization_gradf,
+
+        # scalar parameters
+        name=lr.name,
+        adj=lr.adj,
+        dobias=dobias,
+        )
 end
 
 # no weight, bias, gradients, activation

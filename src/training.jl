@@ -4,9 +4,11 @@ TODO
 - best way to set input layer type: flat or image
 - best way to set output layer type: softmax, single, multi, regression?
 
-- implement ADAM and momentum
+- implement ADAM and ADAMW
 - test regression
 - make stats struct immutable
+
+- for commit message
 
 
 =#
