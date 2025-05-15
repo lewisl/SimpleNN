@@ -67,7 +67,7 @@ end
 # ============================
 
 
-Base.@kwdef struct ConvLayer <: Layer  # mutable
+Base.@kwdef struct ConvLayer <: Layer  
     # data arrays
     z::Array{Float64,4} = Float64[;;;;]
     z_norm::Array{Float64,4} = Float64[;;;;]  # if doing batchnorm: 2d to simplify batchnorm calcs
@@ -85,11 +85,11 @@ Base.@kwdef struct ConvLayer <: Layer  # mutable
     grad_weight::Array{Float64,4} = Float64[;;;;]
     grad_bias::Vector{Float64} = Float64[]
 
-    # layer specific functions
-    activationf::Function = relu!
-    activation_gradf::Function = relu_grad!
-    normalizationf::Function = noop
-    normalization_gradf::Function = noop
+    # layer specific functions: DO NOT USE DEFAULTS. defaults force the type and later assignment won't change it
+    activationf::Function
+    activation_gradf::Function
+    normalizationf::Function
+    normalization_gradf::Function
 
     # structs of layer specific parameters
     normparams::NormParam  # = NoNorm()   # initialize to noop that won't allocate
@@ -197,8 +197,6 @@ Base.@kwdef struct LinearLayer <: Layer
 
     # weight arrays
     weight::Array{Float64,2} = Float64[;;] # (output_dim, input_dim)
-    # output_dim::Int64 = 0
-    # input_dim::Int64 = 0
     bias::Vector{Float64} = Float64[]     # (output_dim)
     grad_weight::Array{Float64,2} = Float64[;;]
     grad_bias::Vector{Float64} = Float64[]
@@ -206,11 +204,11 @@ Base.@kwdef struct LinearLayer <: Layer
     # structs of layer specific parameters
     normparams::NormParam = NoNorm()
 
-    # layer specific functions
-    activationf::Function = relu!
-    activation_gradf::Function = relu_grad!
-    normalizationf::Function = noop
-    normalization_gradf::Function = noop
+    # layer specific functions: DO NOT USE DEFAULTS. defaults force the type and later assignment won't change it
+    activationf::Function
+    activation_gradf::Function
+    normalizationf::Function
+    normalization_gradf::Function
 
     # scalar parameters
     name::Symbol = :noname
@@ -221,7 +219,6 @@ end
 
 # constructor method to create a LinearLayer with some inputs calculated based on LayerSpec inputs, then
 function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
-    # weight dims
     outputs = lr.h        # rows
     inputs = size(prevlayer.a, 1)    # rows of lower layer output become columns
     if lr.normalization == :batchnorm
@@ -294,8 +291,9 @@ function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
 
         # scalar parameters
         name=lr.name,
+        optimization=lr.optimization,
         adj=lr.adj,
-        dobias=dobias,
+        dobias=dobias
         )
 end
 

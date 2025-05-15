@@ -54,20 +54,20 @@ three_linear = LayerSpec[
 preptest = true
 full_batch = 60_000
 minibatch_size = 50
-epochs = 2  # 15 epochs yields near perfect training convergence
+epochs = 5  # 15 epochs yields near perfect training convergence
 layerspecs = one_conv
 
-hp = HyperParameters(lr=0.1, reg=:L2, regparm=0.00043, do_stats=false)  # reg=:L2, regparm=0.002
+hp = HyperParameters(lr=0.05, reg=:L2, regparm=0.00043, do_stats=false)  # reg=:L2, regparm=0.00043,
 
 # %%
 
-layers = setup_train(layerspecs, minibatch_size)
+layers = setup_train(layerspecs, minibatch_size);
 
 if !preptest
-    x_train, y_train = setup_mnist(full_batch, preptest)
+    x_train, y_train = setup_mnist(full_batch, preptest);
 else
-    x_train, y_train, x_test, y_test = setup_mnist(full_batch, preptest)
-    testsize = size(y_test, 2)
+    x_train, y_train, x_test, y_test = setup_mnist(full_batch, preptest);
+    testsize = size(y_test, 2);
 end;
 
 

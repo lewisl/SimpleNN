@@ -97,3 +97,15 @@ end
 @benchmark dot(local_patch, err) (setup = (local_patch=fill(0.5,3,3); err=(fill(0.4,3,3))))
 @benchmark sum(local_patch[i] * err[i] for i in eachindex(local_patch, err)) (setup = (local_patch=fill(0.5,3,3); err=(fill(0.4,3,3))))
 @benchmark sum(local_patch .* err) (setup = (local_patch=fill(0.5,3,3); err=(fill(0.4,3,3))))
+
+
+for (i, layer) in enumerate(layers)
+    println("layer ", i, " ",typeof(layer))
+    if (typeof(layer) <: ConvLayer) | (typeof(layer) <: LinearLayer)
+        ok = layer.activationf === RELU_PTR
+        println("layer $i : ", ok ? "✓" : "✗  (pointer mismatch)")
+        if !ok
+            @show i typeof(layer) objectid(layer.activationf) objectid(RELU_PTR)
+        end
+    end
+end

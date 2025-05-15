@@ -50,7 +50,7 @@ default_hp = HyperParameters()     # to pass defaults into training_loop
 function setup_train(layerspecs::Vector{LayerSpec}, batch_size)
 
     layers = allocate_layers(layerspecs, batch_size)
-    show_all_array_sizes(layers)
+    show_layer_specs(layers)
 
     return layers
 end
@@ -58,6 +58,7 @@ end
 
 function show_array_sizes(layer)
     println("name: ", layer.name)
+    println("arrays:")
     for p in fieldnames(typeof(layer))
         val = getfield(layer, p)
         if isa(val, AbstractArray)
@@ -66,11 +67,23 @@ function show_array_sizes(layer)
     end
 end
 
+function show_functions(layer)
+    first = true
+    for p in fieldnames(typeof(layer))
+        val = getfield(layer, p)
+        if isa(val, Function)
+            first && println("functions:")
+            println(p, ": ",val, " ",typeof(val))
+            first=false
+        end
+    end
+end
 
-function show_all_array_sizes(layers)
+function show_layer_specs(layers)
     for lr in layers
         println()
         show_array_sizes(lr)
+        show_functions(lr)
         println()
     end
     return
@@ -292,9 +305,9 @@ function simple_update!(layer::Layer, hp)
         layer.weight[i] -= hp.lr * layer.grad_weight[i]
     end
 
-    if layer.normparams isa BatchNorm
-        update_batchnorm!(layer.normparams, hp)
-    end
+    # if layer.normparams isa BatchNorm
+    #     update_batchnorm!(layer.normparams, hp)
+    # end
 
     # Separate loop for bias
     layer.dobias && @inbounds for i in eachindex(layer.bias)
@@ -351,27 +364,27 @@ function train_loop!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size
     # setup minibatches
     if minibatch_size == 0
         # setup noop minibatch parameters
-        mini_num = 1
+        n_minibatches = 1
         n_samples = full_batch
     else
         if rem(full_batch, minibatch_size) != 0
             error("minibatch_size does not divide evenly into batch_size")
         else
-            mini_num = div(full_batch, minibatch_size)
+            n_minibatches = div(full_batch, minibatch_size)
             n_samples = minibatch_size
         end
     end
 
-    @show mini_num
+    @show n_minibatches
     @show n_samples
 
     stats = allocate_stats(full_batch, minibatch_size, epochs)
     counter = 0
 
     for e = 1:epochs
-        @inbounds for batno in 1:mini_num
+        @inbounds for batno in 1:n_minibatches
 
-            if mini_num > 1
+            if n_minibatches > 1
                 start_obs = (batno - 1) * minibatch_size + 1
                 end_obs = start_obs + minibatch_size - 1
                 x_part = view(x, :, :, :, start_obs:end_obs)
