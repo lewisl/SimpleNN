@@ -2,7 +2,7 @@
 Module Convolution:
 
 """
-module Convolution
+module SimpleNN
 
 
 # ----------------------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-name = "Convolution"
+name = "SimpleNN"
 uuid = "36137998-1e00-46a9-86ff-ef6b0df5841b"
 authors = ["Lewis Levin <lewis@neilson-levin.org>"]
 repo = ""

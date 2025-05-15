@@ -1,7 +1,7 @@
 # %% packages and inputs
 
 
-using Convolution
+using SimpleNN
 
 
 # %%
