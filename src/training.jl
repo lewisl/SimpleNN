@@ -4,7 +4,6 @@ TODO
 - best way to set input layer type: flat or image
 - best way to set output layer type: softmax, single, multi, regression?
 
-- implement ADAM and ADAMW for all layers.  then allow it to be applied by layer
 - test regression
 - make stats struct immutable
 
@@ -13,6 +12,7 @@ TODO
 
 =#
 
+using LoopVectorization
 
 # ============================
 # Setup training
@@ -355,26 +355,27 @@ function update_batchnorm!(layer, hp, t)
     bn = layer.normparams
     ad = layer.optparams
     if isa(bn, BatchNorm) && isa(ad, AdamParam)
-        # ad = bn.optparams
         pre_adam_batchnorm!(bn, ad, t)
         b1_divisor = 1.0 / (1.0 - ad.b1^t)
         b2_divisor = 1.0 / (1.0 - ad.b2^t)
 
         # Update gamma (scale) parameter - no weight decay for batch norm
-         for i in eachindex(bn.gam)
-            bn.gam[i] = (bn.gam[i] - 
-                        hp.lr * ((bn.grad_m_gam[i] * b1_divisor) / (sqrt(bn.grad_v_gam[i] * b2_divisor) + 1e-12)))
+        @turbo for i in eachindex(bn.gam)
+            adam_term = (bn.grad_m_gam[i] * b1_divisor) / (sqrt(bn.grad_v_gam[i] * b2_divisor) + 1e-12)
+            bn.gam[i] -= hp.lr * adam_term
         end
 
         # Update beta (shift) parameter - no weight decay for batch norm
-        @inbounds  for i in eachindex(bn.bet)
-            bn.bet[i] = (bn.bet[i] - 
-                        hp.lr * ((bn.grad_m_bet[i] * b1_divisor) / (sqrt(bn.grad_v_bet[i] * b2_divisor) + 1e-12)))
+        @turbo for i in eachindex(bn.bet)
+            adam_term = (bn.grad_m_bet[i] * b1_divisor) / (sqrt(bn.grad_v_bet[i] * b2_divisor) + 1e-12)
+            bn.bet[i] -= hp.lr * adam_term
         end
     else
         # Simple SGD update if not using Adam/AdamW
-        @. bn.gam -= (hp.lr * bn.grad_gam)
-        @. bn.bet -= (hp.lr * bn.grad_bet)
+        @turbo for i in eachindex(bn.gam)
+            bn.gam[i] -= hp.lr * bn.grad_gam[i]
+            bn.bet[i] -= hp.lr * bn.grad_bet[i]
+        end
     end
 end
 
@@ -409,58 +410,75 @@ function update_weights!(layer::Layer, hp, t)
         b1_divisor = 1.0 / (1.0 - ad.b1^t)
         b2_divisor = 1.0 / (1.0 - ad.b2^t)
 
-        # Update weights
-        @inbounds @fastmath  for i in eachindex(layer.weight)
+        # Update weights with @turbo for better performance
+        @turbo for i in eachindex(layer.weight)
             # Base Adam update term
             adam_term = (layer.grad_m_weight[i] * b1_divisor) / (sqrt(layer.grad_v_weight[i] * b2_divisor) + 1e-12)
-            
-            # Add regularization if specified (model-wide property)
-            if hp.reg == :L1
-                adam_term += hp.regparm * sign(layer.weight[i])
-            elseif hp.reg == :L2
-                adam_term += hp.regparm * layer.weight[i]
+            layer.weight[i] -= hp.lr * adam_term
+        end
+
+        # Apply regularization and weight decay outside @turbo
+        if hp.reg == :L1
+            @turbo for i in eachindex(layer.weight)
+                layer.weight[i] -= hp.lr * hp.regparm * sign(layer.weight[i])
             end
-            
-            # Apply learning rate to the gradient update
-            # layer.weight[i] -= hp.lr * adam_term
-            
-            # Apply decoupled weight decay for AdamW
-            if ad.decay > 0
-                layer.weight[i] -= (hp.lr * ad.decay * layer.weight[i]) + (hp.lr * adam_term)
-            else
-                layer.weight[i] -= (hp.lr * adam_term)
+        elseif hp.reg == :L2
+            @turbo for i in eachindex(layer.weight)
+                layer.weight[i] -= hp.lr * hp.regparm * layer.weight[i]
             end
         end
 
-        # Update biases (no regularization for biases)
+        # Apply weight decay if needed
+        if ad.decay > 0
+            @turbo for i in eachindex(layer.weight)
+                layer.weight[i] -= hp.lr * ad.decay * layer.weight[i]
+            end
+        end
+
+        # Update biases with @turbo
         if layer.dobias
-            @inbounds  for i in eachindex(layer.bias)
-                # Base Adam update term
+            @turbo for i in eachindex(layer.bias)
                 adam_term = (layer.grad_m_bias[i] * b1_divisor) / (sqrt(layer.grad_v_bias[i] * b2_divisor) + 1e-12)
-                
-                # Apply learning rate to the gradient update
                 layer.bias[i] -= hp.lr * adam_term
-                
-                # Apply decoupled weight decay for AdamW
-                if ad.decay > 0
-                    layer.bias[i] -= hp.lr  * layer.bias[i]  # we don't do decay on bias term even with Adamw
-                end
+            end
+        end
+
+        # Update batch normalization parameters if present
+        if isa(layer.normparams, BatchNorm)
+            bn = layer.normparams
+            pre_adam_batchnorm!(bn, ad, t)
+            
+            # Update gamma (scale) parameter
+            @turbo for i in eachindex(bn.gam)
+                adam_term = (bn.grad_m_gam[i] * b1_divisor) / (sqrt(bn.grad_v_gam[i] * b2_divisor) + 1e-12)
+                bn.gam[i] -= hp.lr * adam_term
+            end
+
+            # Update beta (shift) parameter
+            @turbo for i in eachindex(bn.bet)
+                adam_term = (bn.grad_m_bet[i] * b1_divisor) / (sqrt(bn.grad_v_bet[i] * b2_divisor) + 1e-12)
+                bn.bet[i] -= hp.lr * adam_term
             end
         end
     else
         # Simple SGD update
-        @inbounds for i in eachindex(layer.weight)
-            update = layer.grad_weight[i]
-            if hp.reg == :L1
-                update += hp.regparm * sign(layer.weight[i])
-            elseif hp.reg == :L2
-                update += hp.regparm * layer.weight[i]
+        @turbo for i in eachindex(layer.weight)
+            layer.weight[i] -= hp.lr * layer.grad_weight[i]
+        end
+
+        # Apply regularization outside @turbo
+        if hp.reg == :L1
+            @turbo for i in eachindex(layer.weight)
+                layer.weight[i] -= hp.lr * hp.regparm * sign(layer.weight[i])
             end
-            layer.weight[i] -= hp.lr * update
+        elseif hp.reg == :L2
+            @turbo for i in eachindex(layer.weight)
+                layer.weight[i] -= hp.lr * hp.regparm * layer.weight[i]
+            end
         end
 
         if layer.dobias
-            @inbounds for i in eachindex(layer.bias)
+            @turbo for i in eachindex(layer.bias)
                 layer.bias[i] -= hp.lr * layer.grad_bias[i]
             end
         end

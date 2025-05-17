@@ -2,6 +2,8 @@
 
 
 using SimpleNN
+using Profile
+using BenchmarkTools
 
 
 # %%
@@ -14,10 +16,10 @@ using SimpleNN
 # 64 channels is not great
 one_conv = LayerSpec[
     LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
-    convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, normalization=:batchnorm, optimization=:adamw)  # , normalization=:batchnorm  , optimization=:adamw
+    convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, normalization=:batchnorm)  # , normalization=:batchnorm  , optimization=:adamw
     maxpoollayerspec(name=:maxpool1, f_h=2, f_w=2)
     flattenlayerspec(name=:flatten)
-    linearlayerspec(output=200, activation=:relu, name=:linear1, normalization=:batchnorm, optimization=:adamw)
+    linearlayerspec(output=200, activation=:relu, name=:linear1, normalization=:batchnorm)
     LayerSpec(h=10, kind=:linear, name=:output, activation=:softmax)
 ];
 
@@ -111,10 +113,35 @@ y_single = reshape(y_single, :, 1);
 
 display_mnist_digit(x_single)
 
-Convolution.feedforward!(pred1layers, x_single, 1);
+SimpleNN.feedforward!(pred1layers, x_single, 1);
 pred1 = pred1layers[end].a;
 
-target_digit = Convolution.find_max_idx(y_single[:, 1]) - 1;
-pred_digit = Convolution.find_max_idx(pred1[:, 1]) - 1;
+target_digit = SimpleNN.find_max_idx(y_single[:, 1]) - 1;
+pred_digit = SimpleNN.find_max_idx(pred1[:, 1]) - 1;
 
 println("\nTarget digit: ", target_digit, "  Predicted digit: ", pred_digit)
+
+# --- Profiling the training loop ---
+Profile.clear()
+@profile begin
+    stats = train_loop!(layers; x=x_train, y=y_train, full_batch=full_batch, epochs=epochs, minibatch_size=minibatch_size, hp=hp)
+end
+Profile.print()
+
+# --- Micro-benchmarks on a representative layer (e.g., first ConvLayer) ---
+rep_layer = layers[2]  # adjust index if needed for your model
+
+println("\nBenchmarking update_weights! on rep_layer:")
+@btime update_weights!($rep_layer, $hp, 1)
+
+println("\nBenchmarking update_batchnorm! on rep_layer:")
+@btime update_batchnorm!($rep_layer, $hp, 1)
+
+println("\nBenchmarking pre_adam! on rep_layer:")
+@btime pre_adam!($rep_layer, $rep_layer.optparams, 1)
+
+println("\nBenchmarking pre_adam_batchnorm! on rep_layer:")
+@btime pre_adam_batchnorm!($rep_layer.normparams, $rep_layer.optparams, 1)
+
+println("\nBenchmarking adam_helper! on rep_layer weights:")
+@btime adam_helper!($rep_layer.grad_m_weight, $rep_layer.grad_v_weight, $rep_layer.grad_weight, $rep_layer.optparams, 1)

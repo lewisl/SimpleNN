@@ -2,6 +2,8 @@
 # abstract types for layer and normparams
 # ============================
 
+using LoopVectorization
+
 abstract type Layer end     # super type for all layers
 abstract type NormParam end # super type for all normalization parameters
 abstract type OptParam end  # super type for Optimization params and arrays
@@ -469,8 +471,8 @@ function layer_forward!(layer::ConvLayer, x::AbstractArray{Float64,4}, batch_siz
         for oc in axes(layer.z, 3)  # output channels
             for j in axes(layer.z, 2)  # width
                 for i in axes(layer.z, 1)  # height
-                    # Initialize with bias or 0.0 and perform convolution in one pass
-                    layer.z[i, j, oc, b] = ifelse(layer.dobias, layer.bias[oc], 0.0)
+                    # Initialize with bias or 0.0 and perform convolution in one pass: always zero if layer.dobias == false
+                    layer.z[i, j, oc, b] = layer.bias[oc]                                          # ifelse(layer.dobias, layer.bias[oc], 0.0)
                     for ic in axes(layer.weight, 3)  # input channels
                         for fh in axes(layer.weight, 1)  # filter height
                             for fw in axes(layer.weight, 2)  # filter width
@@ -624,7 +626,7 @@ end
 function layer_backward!(layer::MaxPoolLayer, layer_above, n_samples)
     fill!(layer.eps_l, 0.0)
     (pool_h, pool_w) = layer.pool_size
-    @inbounds for bn in axes(layer_above.eps_l, 4)
+    @inbounds for bn in axes(layer_above.eps_l, 4)  # @inbounds
         for c in axes(layer.eps_l, 3)
             for j = axes(layer_above.eps_l, 2)  #  1:W_in
                 for i = axes(layer_above.eps_l, 1) #  1:H_in
@@ -647,7 +649,7 @@ end
 
 function layer_forward!(layer::FlattenLayer, x::Array{Float64,4}, batch_size)
     h, w, ch, _ = size(x)
-    @inbounds for b in axes(x, 4)  # iterate over batch dimension
+    @inbounds for b in axes(x, 4)  # iterate over batch dimension  
         idx = 1
         for c in axes(x, 3)  # iterate over channels
             for j in axes(x, 2)  # iterate over width
@@ -772,8 +774,8 @@ function batchnorm!(layer::ConvLayer)
             # Pre-compute inverse std for efficiency
             inv_std = 1.0 / (bn.stddev[cidx] + 1e-12)
 
-            @. ch_z_norm = (ch_z - bn.mu[cidx]) * inv_std
-            @. ch_z = ch_z_norm * bn.gam[cidx] + bn.bet[cidx]
+            ch_z_norm .= (ch_z .- bn.mu[cidx]) .* inv_std
+            ch_z .= ch_z_norm .* bn.gam[cidx] .+ bn.bet[cidx]
         end
 
         # Update running statistics
@@ -784,8 +786,8 @@ function batchnorm!(layer::ConvLayer)
             # Pre-compute inverse std for efficiency
             inv_std = 1.0 / (bn.std_run[cidx] + 1e-12)
 
-            @. ch_z_norm = (ch_z - bn.mu_run[cidx]) * inv_std
-            @. ch_z = ch_z_norm * bn.gam[cidx] + bn.bet[cidx]
+            ch_z_norm .= (ch_z .- bn.mu_run[cidx]) .* inv_std
+            ch_z .= ch_z_norm .* bn.gam[cidx] .+ bn.bet[cidx]
         end
     end
     return
@@ -820,7 +822,7 @@ function batchnorm_grad!(layer::ConvLayer)
 
     @inbounds @fastmath for (cidx, ch_z, ch_z_norm) in zip(1:c, eachslice(layer.pad_next_eps, dims=3), eachslice(layer.z_norm,dims=3))
         # Step 1: Scale by gamma (delta_z_norm)
-        @. ch_z = bn.gam[cidx] * ch_z
+        ch_z .= bn.gam[cidx] .* ch_z
 
         # Step 2: Compute statistics needed for gradient
         # - sum of delta_z_norm
@@ -955,9 +957,6 @@ end
 
 # TODO we should test for this earlier and not have to test again within the function
 @inline function pre_adam_batchnorm!(bn, ad, t)
-    # bn = layer.normparams   # will either be a BatchNorm or a NoNorm
-    # ad = layer.optparams
-
     adam_helper!(bn.grad_m_gam, bn.grad_v_gam, bn.grad_gam, ad, t)
     adam_helper!(bn.grad_m_bet, bn.grad_v_bet, bn.grad_bet, ad, t)        
 end
@@ -966,16 +965,11 @@ end
     b1_term = 1.0 - (ad.b1)^t
     b2_term = 1.0 - (ad.b2)^t
 
-    # @. grad_m_lrparam = ad.b1 * grad_m_lrparam + (1.0 - ad.b1^t) * grad_lrparam  
-    # @. grad_v_lrparam = ad.b2 * grad_v_lrparam + (1.0 - ad.b2^t) * grad_lrparam^2   
-
-    # loop implementation
-    for i in eachindex(grad_m_lrparam)
+    # Use @turbo for better performance
+    @turbo for i in eachindex(grad_m_lrparam)
         grad_m_lrparam[i] = ad.b1 * grad_m_lrparam[i] + b1_term * grad_lrparam[i]
         grad_v_lrparam[i] = ad.b2 * grad_v_lrparam[i] + b2_term * grad_lrparam[i]^2
     end
-
-    # @. grad_lrparam = (grad_m_lrparam / (1.0 - ad.b1^t)) / (sqrt(grad_v_lrparam / (1.0 - ad.b2^t)) + 1e-12)
 end
 
 # same as adam until we actually to the weight update
