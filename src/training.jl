@@ -22,8 +22,8 @@ TODO
 # function simple_update! end
 # function reg_L1_update! end
 # function reg_L2_update! end
-function adam_update! end
-function adamw_update! end
+# function adam_update! end
+# function adamw_update! end
 
 Base.@kwdef mutable struct HyperParameters
     lr::Float64 = 0.02         # learning rate
@@ -351,32 +351,32 @@ end
 
 
 
-# function update_batchnorm!(layer, hp, t)
-#     bn = layer.normparams
-#     ad = layer.optparams
-#     if isa(bn, BatchNorm) && isa(ad, AdamParam)
-#         ad = bn.optparams
-#         pre_adam_batchnorm!(bn, t)
-#         b1_divisor = 1.0 - ad.b1^t
-#         b2_divisor = 1.0 - ad.b2^t
+function update_batchnorm!(layer, hp, t)
+    bn = layer.normparams
+    ad = layer.optparams
+    if isa(bn, BatchNorm) && isa(ad, AdamParam)
+        # ad = bn.optparams
+        pre_adam_batchnorm!(bn, ad, t)
+        b1_divisor = 1.0 / (1.0 - ad.b1^t)
+        b2_divisor = 1.0 / (1.0 - ad.b2^t)
 
-#         # Update gamma (scale) parameter - no weight decay for batch norm
-#         @inbounds for i in eachindex(bn.gam)
-#             bn.gam[i] = (bn.gam[i] - 
-#                         hp.lr * ((bn.grad_m_gam[i] / b1_divisor) / (sqrt(bn.grad_v_gam[i] / b2_divisor) + 1e-12)))
-#         end
+        # Update gamma (scale) parameter - no weight decay for batch norm
+         for i in eachindex(bn.gam)
+            bn.gam[i] = (bn.gam[i] - 
+                        hp.lr * ((bn.grad_m_gam[i] * b1_divisor) / (sqrt(bn.grad_v_gam[i] * b2_divisor) + 1e-12)))
+        end
 
-#         # Update beta (shift) parameter - no weight decay for batch norm
-#         @inbounds for i in eachindex(bn.bet)
-#             bn.bet[i] = (bn.bet[i] - 
-#                         hp.lr * ((bn.grad_m_bet[i] / b1_divisor) / (sqrt(bn.grad_v_bet[i] / b2_divisor) + 1e-12)))
-#         end
-#     else
-#         # Simple SGD update if not using Adam/AdamW
-#         @fastmath bn.gam .-= (hp.lr .* bn.grad_gam)
-#         @fastmath bn.bet .-= (hp.lr .* bn.grad_bet)
-#     end
-# end
+        # Update beta (shift) parameter - no weight decay for batch norm
+        @inbounds  for i in eachindex(bn.bet)
+            bn.bet[i] = (bn.bet[i] - 
+                        hp.lr * ((bn.grad_m_bet[i] * b1_divisor) / (sqrt(bn.grad_v_bet[i] * b2_divisor) + 1e-12)))
+        end
+    else
+        # Simple SGD update if not using Adam/AdamW
+        @. bn.gam -= (hp.lr * bn.grad_gam)
+        @. bn.bet -= (hp.lr * bn.grad_bet)
+    end
+end
 
 # function reg_L1_update!(layer::Layer, hp, counter)
 #     @inbounds for i in eachindex(layer.weight)
@@ -406,13 +406,13 @@ function update_weights!(layer::Layer, hp, t)
     if isa(layer.optparams, AdamParam)
         ad = layer.optparams
         pre_adam!(layer, ad, t)
-        b1_divisor = 1.0 - ad.b1^t
-        b2_divisor = 1.0 - ad.b2^t
+        b1_divisor = 1.0 / (1.0 - ad.b1^t)
+        b2_divisor = 1.0 / (1.0 - ad.b2^t)
 
         # Update weights
-        @inbounds for i in eachindex(layer.weight)
+        @inbounds @fastmath  for i in eachindex(layer.weight)
             # Base Adam update term
-            adam_term = (layer.grad_m_weight[i] / b1_divisor) / (sqrt(layer.grad_v_weight[i] / b2_divisor) + 1e-12)
+            adam_term = (layer.grad_m_weight[i] * b1_divisor) / (sqrt(layer.grad_v_weight[i] * b2_divisor) + 1e-12)
             
             # Add regularization if specified (model-wide property)
             if hp.reg == :L1
@@ -434,9 +434,9 @@ function update_weights!(layer::Layer, hp, t)
 
         # Update biases (no regularization for biases)
         if layer.dobias
-            @inbounds for i in eachindex(layer.bias)
+            @inbounds  for i in eachindex(layer.bias)
                 # Base Adam update term
-                adam_term = (layer.grad_m_bias[i] / b1_divisor) / (sqrt(layer.grad_v_bias[i] / b2_divisor) + 1e-12)
+                adam_term = (layer.grad_m_bias[i] * b1_divisor) / (sqrt(layer.grad_v_bias[i] * b2_divisor) + 1e-12)
                 
                 # Apply learning rate to the gradient update
                 layer.bias[i] -= hp.lr * adam_term

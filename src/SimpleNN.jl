@@ -7,6 +7,18 @@ module SimpleNN
 
 # ----------------------------------------------------------------------------------------
 
+
+using Random
+using LinearAlgebra
+using Colors, Plots
+using Serialization
+using MLDatasets
+using StatsBase
+using Statistics
+using LinearAlgebra
+using BenchmarkTools
+
+
 include("layer_functions.jl")
 include("training.jl")
 include("mnist_fun.jl")
@@ -44,14 +56,6 @@ export
     show_all_array_sizes,
     plot_stats
 
-using Random
-using LinearAlgebra
-using Colors, Plots
-using Serialization
-using MLDatasets
-using StatsBase
-using Statistics
-using LinearAlgebra
-using BenchmarkTools
+
 
 end  # module ConvLayer

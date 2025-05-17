@@ -46,7 +46,8 @@ You must provide inputs for name, activation, outch, f_h, and f_w.
 """
 function convlayerspec(; name::Symbol, activation::Symbol=:relu, normalization::Symbol=:none, optimization::Symbol=:none, 
         adj::Float64=0.002, h::Int64=0, w::Int64=0, outch::Int64, f_h::Int64, f_w::Int64, inch::Int64=0, padrule::Symbol=:same)
-    LayerSpec(name=name, kind=:conv, activation=activation, normalization=normalization, optimization=optimization, adj=adj, h=h, w=w, outch=outch, f_h=f_h, f_w=f_w, inch=inch, padrule=padrule)
+    LayerSpec(name=name, kind=:conv, activation=activation, normalization=normalization, optimization=optimization, 
+                adj=adj, h=h, w=w, outch=outch, f_h=f_h, f_w=f_w, inch=inch, padrule=padrule)
 end
 
 function linearlayerspec(; name::Symbol, activation::Symbol=:relu, normalization::Symbol=:none, optimization::Symbol=:none, 
@@ -125,8 +126,8 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
             normalization_gradf = batchnorm_grad!
             normparams=BatchNorm{Vector{Float64}}(gam=ones(outch), bet=zeros(outch),
                 grad_gam=zeros(outch), grad_bet=zeros(outch),
-                grad_v_gam=zeros(outch), grad_s_gam=zeros(outch),
-                grad_v_bet=zeros(outch), grad_s_bet=zeros(outch),
+                grad_m_gam=zeros(outch), grad_v_gam=zeros(outch),
+                grad_m_bet=zeros(outch), grad_v_bet=zeros(outch),
                 mu=zeros(outch), stddev=zeros(outch),
                 mu_run=zeros(outch), std_run=zeros(outch))
             dobias = false
@@ -258,8 +259,8 @@ function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
             normalization_gradf = batchnorm_grad!
             normparams=BatchNorm{Vector{Float64}}(gam=ones(outputs), bet=zeros(outputs),
                 grad_gam=zeros(outputs), grad_bet=zeros(outputs),
-                grad_v_gam=zeros(outputs), grad_s_gam=zeros(outputs),
-                grad_v_bet=zeros(outputs), grad_s_bet=zeros(outputs),
+                grad_m_gam=zeros(outputs), grad_v_gam=zeros(outputs),
+                grad_m_bet=zeros(outputs), grad_v_bet=zeros(outputs),
                 mu=zeros(outputs), stddev=zeros(outputs),
                 mu_run=zeros(outputs), std_run=zeros(outputs))
             dobias = false
@@ -426,10 +427,10 @@ Base.@kwdef struct BatchNorm{T<:AbstractArray} <: NormParam  # can this work for
     grad_gam::T
     grad_bet::T
     # for optimization updates of bn parameters
+    grad_m_gam::T
     grad_v_gam::T
-    grad_s_gam::T
+    grad_m_bet::T
     grad_v_bet::T
-    grad_s_bet::T
     # for standardizing batch values
     mu::T         # mean of z; same size as bias = no. of input layer units
     stddev::T       # std dev of z;   ditto
@@ -939,25 +940,29 @@ end   # a noop struct when not doing Batch Normalization
 
 
 # calculates the momentum 'm' and the root mean square 'v' term for adam and adamw
-function pre_adam!(layer, ad, t)
+@inline function pre_adam!(layer, ad, t)
     # ad = layer.optparam
+    # bn = layer.normparams
 
     adam_helper!(layer.grad_m_weight, layer.grad_v_weight, layer.grad_weight, ad, t)
     layer.dobias && (adam_helper!(layer.grad_m_bias, layer.grad_v_bias, layer.grad_bias, ad, t))
+
+    # if isa(bn, BatchNorm) # yes, doing batchnorm, and optimization of batch_norm params
+    #     adam_helper!(bn.grad_m_gam, bn.grad_v_gam, bn.grad_gam, ad, t)
+    #     adam_helper!(bn.grad_m_bet, bn.grad_v_bet, bn.grad_bet, ad, t)        
+    # end
 end
 
 # TODO we should test for this earlier and not have to test again within the function
-function pre_adam_batchnorm!(layer, t)
-    bn = layer.normparam   # will either be a BatchNorm or a NoNorm
-    ad = layer.optparam
+@inline function pre_adam_batchnorm!(bn, ad, t)
+    # bn = layer.normparams   # will either be a BatchNorm or a NoNorm
+    # ad = layer.optparams
 
-    if isa(bn, BatchNorm) # yes, doing batchnorm, and optimization of batch_norm params
-        adam_helper!(bn.grad_m_gam, bn.grad_v_gam, bn.grad_gam, ad, t)
-        adam_helper!(bn.grad_m_bet, bn.grad_v_bet, bn.grad_bet, ad, t)        
-    end
+    adam_helper!(bn.grad_m_gam, bn.grad_v_gam, bn.grad_gam, ad, t)
+    adam_helper!(bn.grad_m_bet, bn.grad_v_bet, bn.grad_bet, ad, t)        
 end
 
-function adam_helper!(grad_m_lrparam, grad_v_lrparam, grad_lrparam, ad, t)
+@inline function adam_helper!(grad_m_lrparam, grad_v_lrparam, grad_lrparam, ad, t)
     b1_term = 1.0 - (ad.b1)^t
     b2_term = 1.0 - (ad.b2)^t
 
