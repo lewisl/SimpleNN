@@ -4,6 +4,7 @@
 
 abstract type Layer end     # super type for all layers
 abstract type NormParam end # super type for all normalization parameters
+abstract type OptParam end  # super type for Optimization params and arrays
 
 
 """
@@ -22,7 +23,7 @@ Base.@kwdef struct LayerSpec
     kind::Symbol = :none
     activation::Symbol = :none
     normalization::Symbol = :none  # options are :none, :batchnorm
-    optimization::Symbol = :none  # options are :none :adam
+    optimization::Symbol = :none  # options are :none :adam :adamw
     adj::Float64 = 0      # leaky_relu factor. also for he_initialize
     h::Int64 = 0          # image height (rows) or output neurons for linear layers
     w::Int64 = 0          # image width (columns)
@@ -69,21 +70,27 @@ end
 
 Base.@kwdef struct ConvLayer <: Layer  
     # data arrays
-    z::Array{Float64,4} = Float64[;;;;]
-    z_norm::Array{Float64,4} = Float64[;;;;]  # if doing batchnorm: 2d to simplify batchnorm calcs
-    a::Array{Float64,4} = Float64[;;;;]
-    a_below::Array{Float64,4} = Float64[;;;;]
-    pad_a_below::Array{Float64,4} = Float64[;;;;]
-    eps_l::Array{Float64,4} = Float64[;;;;]
-    pad_next_eps::Array{Float64,4} = Float64[;;;;]  # TODO need to test if this is needed given successive conv layer sizes
-    grad_a::Array{Float64,4} = Float64[;;;;]
-    pad_x::Array{Float64,4} = Float64[;;;;]
+    z::Array{Float64,4}  # = Float64[;;;;]
+    z_norm::Array{Float64,4}  # = Float64[;;;;]  # if doing batchnorm: 2d to simplify batchnorm calcs
+    a::Array{Float64,4}  # = Float64[;;;;]
+    a_below::Array{Float64,4}  # = Float64[;;;;]
+    pad_a_below::Array{Float64,4}  # = Float64[;;;;]
+    eps_l::Array{Float64,4}  # = Float64[;;;;]
+    pad_next_eps::Array{Float64,4}  # = Float64[;;;;]  # TODO need to test if this is needed given successive conv layer sizes
+    grad_a::Array{Float64,4}  # = Float64[;;;;]
+    pad_x::Array{Float64,4}  # = Float64[;;;;]
 
     # weight arrays
-    weight::Array{Float64,4} = Float64[;;;;]  # (filter_h, filter_w, in_channels, out_channels)
-    bias::Vector{Float64} = Float64[]    # (out_channels)
-    grad_weight::Array{Float64,4} = Float64[;;;;]
-    grad_bias::Vector{Float64} = Float64[]
+    weight::Array{Float64,4}  # = Float64[;;;;]  # (filter_h, filter_w, in_channels, out_channels)
+    bias::Vector{Float64}  # = Float64[]    # (out_channels)
+    grad_weight::Array{Float64,4}  # = Float64[;;;;]
+    grad_bias::Vector{Float64}  # = Float64[]
+
+    # cache arrays for optimization (only initialize and allocate if using)
+    grad_m_weight::Array{Float64, 4}
+    grad_m_bias::Vector{Float64}
+    grad_v_weight::Array{Float64,4}
+    grad_v_bias::Vector{Float64}
 
     # layer specific functions: DO NOT USE DEFAULTS. defaults force the type and later assignment won't change it
     activationf::Function
@@ -92,18 +99,19 @@ Base.@kwdef struct ConvLayer <: Layer
     normalization_gradf::Function
 
     # structs of layer specific parameters
-    normparams::NormParam  # = NoNorm()   # initialize to noop that won't allocate
+    normparams::NormParam     # initialize to noop that won't allocate
+    optparams::OptParam
 
     # scalar parameters
-    name::Symbol = :noname
-    optimization::Symbol = :none
-    adj::Float64 = 0.0
-    padrule::Symbol = :same   # other option is :none
-    stride::Int64 = 1     # assume stride is symmetrical for now
-    dobias::Bool = true
+    name::Symbol  # = :noname
+    optimization::Symbol  # = :none
+    adj::Float64  # = 0.0
+    padrule::Symbol  # = :same   # other option is :none
+    stride::Int64  # = 1     # assume stride is symmetrical for now
+    dobias::Bool  # = true
 end
 
-# constructor method to do prep calculations based on LayerSpec inputs, then create a ConvLayer
+# this method assigns every field with default initialization or values based on layerspec inputs
 function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
     outch = lr.outch
     prev_h, prev_w, inch, _ = size(prevlayer.a)
@@ -115,15 +123,17 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
     if lr.normalization == :batchnorm
             normalizationf = batchnorm!
             normalization_gradf = batchnorm_grad!
-            normparams=BatchNorm{Vector{Float64},Vector{Float64}}(gam=ones(outch), bet=zeros(outch),
-                delta_gam=zeros(outch), delta_bet=zeros(outch),
+            normparams=BatchNorm{Vector{Float64}}(gam=ones(outch), bet=zeros(outch),
+                grad_gam=zeros(outch), grad_bet=zeros(outch),
+                grad_v_gam=zeros(outch), grad_s_gam=zeros(outch),
+                grad_v_bet=zeros(outch), grad_s_bet=zeros(outch),
                 mu=zeros(outch), stddev=zeros(outch),
                 mu_run=zeros(outch), std_run=zeros(outch))
             dobias = false
         elseif lr.normalization == :none
             normalizationf = noop
             normalization_gradf = noop
-            normparams = NoNorm()
+            normparams = NoNorm() # initialize as empty struct of different type
             dobias = true
         else
             error("Only :batchnorm and :none  supported, not $(Symbol(lr.normalization)).")
@@ -148,6 +158,14 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
             error("Only :relu, :leaky_relu and :none  supported, not $(Symbol(lr.activation)).")
         end
 
+        if (lr.optimization == :adam) | (lr.optimization == :adamw)
+            optparams = AdamParam(b1=0.9, b2=0.999, decay=0.01)
+        elseif lr.optimization == :none
+            optparams = NoOpt()
+        else
+            error("Only :none, :adam or :adamw supported, not $(Symbol(lr.optimization)).")
+        end
+
     ConvLayer(
         # data arrays
         pad_x=zeros(out_h + 2pad, out_w + 2pad, inch, n_samples),
@@ -166,8 +184,15 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
         grad_weight=zeros(lr.f_h, lr.f_w, inch, outch),
         grad_bias=zeros(outch),
 
+        # cache arrays for optimization (only initialize and allocate if using)
+        grad_m_weight = ifelse(isa(optparams,AdamParam),zeros(lr.f_h, lr.f_w, inch, lr.outch),zeros(0,0,0,0)),
+        grad_m_bias = ifelse(isa(optparams,AdamParam),zeros(outch),zeros(0)),
+        grad_v_weight = ifelse(isa(optparams,AdamParam),zeros(lr.f_h, lr.f_w, inch, lr.outch),zeros(0,0,0,0)),
+        grad_v_bias = ifelse(isa(optparams,AdamParam),zeros(outch),zeros(0)),
+
         # structs of layer specific parameters
-        normparams=normparams,
+        normparams = normparams,
+        optparams = optparams,
 
         # layer specific functions
         activationf = activationf,
@@ -178,6 +203,7 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
         # scalar parameters
         name=lr.name,
         adj=lr.adj,
+        optimization=lr.optimization,
         padrule=lr.padrule,
         stride=lr.stride,
         dobias=dobias
@@ -187,22 +213,28 @@ end
 
 Base.@kwdef struct LinearLayer <: Layer
     # data arrays
-    z::Array{Float64,2} = Float64[;;]       # feed forward linear combination result
-    z_norm::Array{Float64,2} = Float64[;;]  # if doing batchnorm
-    a::Array{Float64,2} = Float64[;;]      # feed forward activation output
-    grad_a::Array{Float64,2} = Float64[;;]  # backprop derivative of activation output
-    a_below::Array{Float64,2} = Float64[;;]
-    eps_l::Array{Float64,2} = Float64[;;]   # backprop error of the layer
-
+    z::Array{Float64,2}  #     = Float64[;;]       # feed forward linear combination result
+    z_norm::Array{Float64,2} #      = Float64[;;]  # if doing batchnorm
+    a::Array{Float64,2}  #     = Float64[;;]      # feed forward activation output
+    grad_a::Array{Float64,2}  #   = Float64[;;]  # backprop derivative of activation output
+    a_below::Array{Float64,2}  #   = Float64[;;]
+    eps_l::Array{Float64,2}   #   = Float64[;;]   # backprop error of the layer
 
     # weight arrays
-    weight::Array{Float64,2} = Float64[;;] # (output_dim, input_dim)
-    bias::Vector{Float64} = Float64[]     # (output_dim)
-    grad_weight::Array{Float64,2} = Float64[;;]
-    grad_bias::Vector{Float64} = Float64[]
+    weight::Array{Float64,2}     # = Float64[;;] # (output_dim, input_dim)
+    bias::Vector{Float64}        # = Float64[]     # (output_dim)
+    grad_weight::Array{Float64,2}   #     = Float64[;;]
+    grad_bias::Vector{Float64}  #   = Float64[]
+
+    # cache arrays for optimization (only initialize and allocate if using)
+    grad_m_weight::Array{Float64, 2}
+    grad_m_bias::Vector{Float64}
+    grad_v_weight::Array{Float64,2}
+    grad_v_bias::Vector{Float64}
 
     # structs of layer specific parameters
-    normparams::NormParam = NoNorm()
+    normparams::NormParam  #       = NoNorm()
+    optparams::OptParam
 
     # layer specific functions: DO NOT USE DEFAULTS. defaults force the type and later assignment won't change it
     activationf::Function
@@ -211,32 +243,35 @@ Base.@kwdef struct LinearLayer <: Layer
     normalization_gradf::Function
 
     # scalar parameters
-    name::Symbol = :noname
-    optimization::Symbol = :none
-    adj::Float64 = 0.0
-    dobias::Bool = true
+    name::Symbol       #  = :noname
+    optimization::Symbol     # = :none
+    adj::Float64   #      = 0.0
+    dobias::Bool    #             = true
 end
 
-# constructor method to create a LinearLayer with some inputs calculated based on LayerSpec inputs, then
+# this method assigns every field with default initialization or values based on layerspec inputs
 function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
     outputs = lr.h        # rows
     inputs = size(prevlayer.a, 1)    # rows of lower layer output become columns
     if lr.normalization == :batchnorm
             normalizationf = batchnorm!
             normalization_gradf = batchnorm_grad!
-            normparams=BatchNorm{Vector{Float64},Vector{Float64}}(gam=ones(outputs), bet=zeros(outputs),
-                delta_gam=zeros(outputs), delta_bet=zeros(outputs),
+            normparams=BatchNorm{Vector{Float64}}(gam=ones(outputs), bet=zeros(outputs),
+                grad_gam=zeros(outputs), grad_bet=zeros(outputs),
+                grad_v_gam=zeros(outputs), grad_s_gam=zeros(outputs),
+                grad_v_bet=zeros(outputs), grad_s_bet=zeros(outputs),
                 mu=zeros(outputs), stddev=zeros(outputs),
                 mu_run=zeros(outputs), std_run=zeros(outputs))
             dobias = false
         elseif lr.normalization == :none
             normalizationf = noop
             normalization_gradf = noop
-            normparams = NoNorm()
+            normparams = NoNorm()  # initialize as empty struct of different type
             dobias = true
         else
             error("Only :batchnorm and :none  supported, not $(Symbol(lr.normalization)).")
         end
+
         if lr.activation == :relu
             activationf=relu!
         elseif lr.activation == :leaky_relu
@@ -264,6 +299,15 @@ function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
             error("Only :relu, :leaky_relu, :softmax and :none  supported, not $(Symbol(lr.activation)).")
         end
 
+        if (lr.optimization == :adam) | (lr.optimization == :adamw)
+            optparams = AdamParam(b1=0.9, b2=0.999, decay=0.01)
+            optimization = lr.optimization
+        elseif lr.optimization == :none
+            optparams = NoOpt()
+        else
+            error("Only :none, :adam or :adamw supported, not $(Symbol(lr.optimization)).")
+        end
+
 
     LinearLayer(
         # data arrays
@@ -280,8 +324,15 @@ function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
         grad_weight=zeros(outputs, inputs),
         grad_bias=zeros(outputs),
 
+        # cache arrays for optimization (only initialize and allocate if using)
+        grad_m_weight = ifelse(isa(optparams,AdamParam),zeros(outputs, inputs),zeros(0,0)),
+        grad_m_bias = ifelse(isa(optparams,AdamParam),zeros(outputs),zeros(0)),
+        grad_v_weight = ifelse(isa(optparams,AdamParam),zeros(outputs, inputs),zeros(0,0)),
+        grad_v_bias = ifelse(isa(optparams,AdamParam),zeros(outputs),zeros(0)),
+
         # structs of layer specific parameters
-        normparams=normparams,
+        normparams = normparams,
+        optparams = optparams,
 
         # layer specific functions
         activationf = activationf,
@@ -368,17 +419,17 @@ end
 struct Batch_norm_params holds batch normalization parameters for
 feedfwd calculations and backprop training.
 """
-Base.@kwdef struct BatchNorm{T<:AbstractArray,U<:AbstractArray} <: NormParam  # can this work for conv and linear???? array sizes differ
+Base.@kwdef struct BatchNorm{T<:AbstractArray} <: NormParam  # can this work for conv and linear???? array sizes differ
     # learned batch parameters to center and scale data
     gam::T  # scaling parameter for z_norm
     bet::T  # shifting parameter for z_norm (equivalent to bias)
-    delta_gam::T
-    delta_bet::T
+    grad_gam::T
+    grad_bet::T
     # for optimization updates of bn parameters
-    # delta_v_gam::T
-    # delta_s_gam::T
-    # delta_v_bet::T
-    # delta_s_bet::T
+    grad_v_gam::T
+    grad_s_gam::T
+    grad_v_bet::T
+    grad_s_bet::T
     # for standardizing batch values
     mu::T         # mean of z; same size as bias = no. of input layer units
     stddev::T       # std dev of z;   ditto
@@ -484,13 +535,6 @@ function layer_backward!(layer::ConvLayer, layer_above, n_samples)
 
     # compute gradients
     compute_grad_weight!(layer, n_samples)
-
-    # compute bias gradient
-    # if layer.dobias
-    #     @inbounds @fastmath for oc in axes(layer.grad_bias,1)
-    #         layer.grad_bias[oc] = sum(@view layer_above.eps_l[:, :, oc, :]) * sample_count_inverse
-    #     end
-    # end
 
     # layer.dobias && layer.grad_bias .= dropdims(sum(layer_above.eps_l, dims=(1,2,4)), dims=(1,2,4))  <-- doesn't work reliably
     layer.dobias && reshape(sum(layer_above.eps_l, dims=(1, 2, 4)), oc)  .* inverse_n_samples
@@ -693,7 +737,7 @@ end
 
 
 # =====================
-# normalization and optimization functions
+# normalization functions
 # =====================
 
 
@@ -752,8 +796,8 @@ function batchnorm_grad!(layer::LinearLayer)
     mb = size(layer.eps_l, 2)
     inverse_mb_size = 1.0 / Float64(mb)
 
-    bn.delta_bet .= sum(layer.eps_l, dims=2) .* inverse_mb_size  # ./ mb
-    bn.delta_gam .= sum(layer.eps_l .* layer.z_norm, dims=2)  .* inverse_mb_size  # ./ mb
+    bn.grad_bet .= sum(layer.eps_l, dims=2) .* inverse_mb_size  # ./ mb
+    bn.grad_gam .= sum(layer.eps_l .* layer.z_norm, dims=2)  .* inverse_mb_size  # ./ mb
 
     layer.eps_l .= bn.gam .* layer.eps_l  # often called delta_z_norm at this stage
     # often called delta_z, dx, dout, or dy
@@ -770,8 +814,8 @@ function batchnorm_grad!(layer::ConvLayer)
 
 
     # Compute gradients for beta and gamma
-    bn.delta_bet .= reshape(sum(layer.pad_next_eps, dims=(1, 2, 4)),c)  .* inverse_mb_size   # ./ mb
-    bn.delta_gam .= reshape(sum(layer.pad_next_eps .* layer.z_norm, dims=(1, 2, 4)), c) .* inverse_mb_size  # ./ mb
+    bn.grad_bet .= reshape(sum(layer.pad_next_eps, dims=(1, 2, 4)),c)  .* inverse_mb_size   # ./ mb
+    bn.grad_gam .= reshape(sum(layer.pad_next_eps .* layer.z_norm, dims=(1, 2, 4)), c) .* inverse_mb_size  # ./ mb
 
     @inbounds @fastmath for (cidx, ch_z, ch_z_norm) in zip(1:c, eachslice(layer.pad_next_eps, dims=3), eachslice(layer.z_norm,dims=3))
         # Step 1: Scale by gamma (delta_z_norm)
@@ -876,3 +920,75 @@ end
 function regression!(layer, adj=0.0)
     layer.a[:] = layer.z[:]
 end
+
+
+# =============================
+# optimization functions
+# =============================
+
+
+Base.@kwdef struct AdamParam <: OptParam
+    b1::Float64
+    b2::Float64
+    decay::Float64  # for AdamW, often called lambda
+end
+
+struct NoOpt <: OptParam 
+    @inline NoOpt() = new()   # help compiler elide any call to empty constructor
+end   # a noop struct when not doing Batch Normalization
+
+
+# calculates the momentum 'm' and the root mean square 'v' term for adam and adamw
+function pre_adam!(layer, ad, t)
+    # ad = layer.optparam
+
+    adam_helper!(layer.grad_m_weight, layer.grad_v_weight, layer.grad_weight, ad, t)
+    layer.dobias && (adam_helper!(layer.grad_m_bias, layer.grad_v_bias, layer.grad_bias, ad, t))
+end
+
+# TODO we should test for this earlier and not have to test again within the function
+function pre_adam_batchnorm!(layer, t)
+    bn = layer.normparam   # will either be a BatchNorm or a NoNorm
+    ad = layer.optparam
+
+    if isa(bn, BatchNorm) # yes, doing batchnorm, and optimization of batch_norm params
+        adam_helper!(bn.grad_m_gam, bn.grad_v_gam, bn.grad_gam, ad, t)
+        adam_helper!(bn.grad_m_bet, bn.grad_v_bet, bn.grad_bet, ad, t)        
+    end
+end
+
+function adam_helper!(grad_m_lrparam, grad_v_lrparam, grad_lrparam, ad, t)
+    b1_term = 1.0 - (ad.b1)^t
+    b2_term = 1.0 - (ad.b2)^t
+
+    # @. grad_m_lrparam = ad.b1 * grad_m_lrparam + (1.0 - ad.b1^t) * grad_lrparam  
+    # @. grad_v_lrparam = ad.b2 * grad_v_lrparam + (1.0 - ad.b2^t) * grad_lrparam^2   
+
+    # loop implementation
+    for i in eachindex(grad_m_lrparam)
+        grad_m_lrparam[i] = ad.b1 * grad_m_lrparam[i] + b1_term * grad_lrparam[i]
+        grad_v_lrparam[i] = ad.b2 * grad_v_lrparam[i] + b2_term * grad_lrparam[i]^2
+    end
+
+    # @. grad_lrparam = (grad_m_lrparam / (1.0 - ad.b1^t)) / (sqrt(grad_v_lrparam / (1.0 - ad.b2^t)) + 1e-12)
+end
+
+# same as adam until we actually to the weight update
+# function adamw!(layer, t)
+#     bn = layer.normparam   # will either be a BatchNorm or a NoNorm
+#     ad = layer.optparam
+
+#     adamw_helper!(layer.grad_m_weight, layer.grad_v_weight, layer.grad_weight, ad, t)
+#     layer.dobias && (adamw_helper!(layer.grad_m_bias, layer.grad_v_bias, layer.grad_bias, ad, t))
+        
+#     if isa(bn, BatchNorm) # yes, doing batchnorm, and optimization of batch_norm params
+#         adamw_helper!(bn.grad_m_gam, bn.grad_v_gam, bn.grad_gam, ad, t)
+#         adam_helper!(bn.grad_m_bet, bn.grad_v_bet, bn.grad_bet, ad, t)     
+#     end
+# end
+
+# function adamw_helper!(grad_m_lrparam, grad_v_lrparam, grad_lrparam, ad,t)
+#     @. grad_m_lrparam = ad.b1 * grad_m_lrparam + (1.0 - ad.b1) * grad_lrparam  
+#     @. grad_v_lrparam = ad.b2 * grad_v_lrparam + (1.0 - ad.b2) * grad_lrparam.^2   
+#     # @. grad_weight = (grad_m_weight / (1.0 - ad.b1^t)) / sqrt(grad_v_weight / (1.0 - ad.b2^t) + ad.ltl_eps)
+# end

@@ -14,10 +14,10 @@ using SimpleNN
 # 64 channels is not great
 one_conv = LayerSpec[
     LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
-    convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, normalization=:batchnorm)  # normalization=:batchnorm
+    convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, optimization=:adamw)  # , normalization=:batchnorm
     maxpoollayerspec(name=:maxpool1, f_h=2, f_w=2)
     flattenlayerspec(name=:flatten)
-    linearlayerspec(output=200, activation=:relu, name=:linear1, normalization=:batchnorm)
+    linearlayerspec(output=200, activation=:relu, name=:linear1, optimization=:adamw)
     LayerSpec(h=10, kind=:linear, name=:output, activation=:softmax)
 ];
 
@@ -36,8 +36,8 @@ two_conv = LayerSpec[
 two_linear = LayerSpec[
     LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
     flattenlayerspec(name=:flatten)
-    linearlayerspec(name=:linear1, output=256, normalization=:batchnorm)
-    linearlayerspec(name=:linear2, output=256, normalization=:batchnorm)
+    linearlayerspec(name=:linear1, output=256)   # normalization=:batchnorm
+    linearlayerspec(name=:linear2, output=256)
     LayerSpec(h=10, kind=:linear, name=:output, activation=:softmax)
 ];
 
@@ -54,10 +54,10 @@ three_linear = LayerSpec[
 preptest = true
 full_batch = 60_000
 minibatch_size = 50
-epochs = 5  # 15 epochs yields near perfect training convergence
+epochs = 1  # 15 epochs yields near perfect training convergence
 layerspecs = one_conv
 
-hp = HyperParameters(lr=0.05, reg=:L2, regparm=0.00043, do_stats=false)  # reg=:L2, regparm=0.00043,
+hp = HyperParameters(lr=0.001, reg=:none, regparm=0.00043, do_stats=false)  # reg=:L2, regparm=0.00043,
 
 # %%
 

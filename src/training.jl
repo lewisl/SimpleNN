@@ -4,7 +4,7 @@ TODO
 - best way to set input layer type: flat or image
 - best way to set output layer type: softmax, single, multi, regression?
 
-- implement ADAM and ADAMW
+- implement ADAM and ADAMW for all layers.  then allow it to be applied by layer
 - test regression
 - make stats struct immutable
 
@@ -19,27 +19,23 @@ TODO
 # ============================
 
 # method pre-declaration so we can use these functions as inputs to the struct. actual functions defined way below.
-function simple_update! end
-function reg_L1_update! end
-function reg_L2_update! end
+# function simple_update! end
+# function reg_L1_update! end
+# function reg_L2_update! end
+function adam_update! end
+function adamw_update! end
 
 Base.@kwdef mutable struct HyperParameters
-    lr::Float64 = 0.02          # learning rate
-    reg::Symbol = :none         # one of :none, :L1, :L2
-    regparm::Float64 = 0.01     # typically called lambda
-    weight_update_f!::Function = simple_update!
+    lr::Float64 = 0.02         # learning rate
+    reg::Symbol = :none      # one of :none, :L1, :L2
+    regparm::Float64 = 0.0004  # typically called lambda
     do_stats::Bool = true
 
-    function HyperParameters(lr::Float64, reg::Symbol, regparm::Float64, weight_update_f!::Function, do_stats::Bool)
+    function HyperParameters(lr::Float64, reg::Symbol, regparm::Float64, do_stats::Bool)
         if !in(reg, [:none, :L1, :L2])
             error("reg must be one of :none, :L1, :l2. Input was :$reg")
         end
-        if reg == :L1
-            weight_update_f! = reg_L1_update!
-        elseif reg == :L2
-            weight_update_f! = reg_L2_update!
-        end
-        new(lr, reg, regparm, weight_update_f!, do_stats)
+        new(lr, reg, regparm, do_stats)
     end
 end
 
@@ -164,7 +160,7 @@ end
 function setup_preds(predlayerspecs, layers::Vector{<:Layer}, n_samples)
     predlayers = allocate_layers(predlayerspecs, n_samples)
     for (prlr, lr) in zip(predlayers, layers)
-        if (typeof(prlr) == ConvLayer) | (typeof(prlr) == LinearLayer)
+        if isa(prlr, ConvLayer) | isa(prlr, LinearLayer)
             prlr.weight .= lr.weight
             if prlr.dobias
                 prlr.bias .= lr.bias
@@ -299,65 +295,191 @@ end
 ######################
 
 
-function simple_update!(layer::Layer, hp)
-    # use explicit loop to eliminate allocation and allow optimization
-    @inbounds for i in eachindex(layer.weight)
-        layer.weight[i] -= hp.lr * layer.grad_weight[i]
-    end
+# function simple_update!(layer::Layer, hp)
+#     # use explicit loop to eliminate allocation and allow optimization
+#     @inbounds for i in eachindex(layer.weight)
+#         layer.weight[i] -= hp.lr * layer.grad_weight[i]
+#     end
 
-    # if layer.normparams isa BatchNorm
-    #     update_batchnorm!(layer.normparams, hp)
-    # end
+#     # Separate loop for bias
+#     layer.dobias && @inbounds for i in eachindex(layer.bias)
+#         layer.bias[i] -= hp.lr * layer.grad_bias[i]
+#     end
+# end
 
-    # Separate loop for bias
-    layer.dobias && @inbounds for i in eachindex(layer.bias)
-        layer.bias[i] -= hp.lr * layer.grad_bias[i]
+
+# function adam_update!(layer::Layer, hp, t)
+#     ad = layer.optparams  
+
+#     pre_adam!(layer, ad, t)
+#     b1_divisor = 1.0 - ad.b1^t
+#     b2_divisor = 1.0 - ad.b2^t
+
+#     l2_term = (hp.reg == :L2) ? hp.lr * hp.regparm * layer.weight[i] : 0.0
+
+#     @inbounds for i in eachindex(layer.weight)
+#         layer.weight[i] -= hp.lr * (layer.grad_m_weight[i] / b1_divisor) / (sqrt(layer.grad_v_weight[i] / b2_divisor) + 1e-12) + l2_term
+#     end
+
+#     layer.dobias && @inbounds for i in eachindex(layer.bias)
+#         layer.bias[i] -= hp.lr * (layer.grad_m_bias[i] / b1_divisor) / (sqrt(layer.grad_v_bias / b2_divisor) + 1e-12) 
+#     end
+
+#     # TODO where do we put the adam update of the batchnorm params?
+# end
+
+
+# function adamw_update!(layer::Layer, hp, t)
+#     ad = layer.optparams
+
+#     pre_adam!(layer, hp, t)
+#     b1_divisor = 1.0 - ad.b1^t
+#     b2_divisor = 1.0 - ad.b2^t
+
+#     @inbounds for i in eachindex(layer.weight)
+#         layer.weight[i] = (layer.weight[i] - 
+#                             hp.lr * ((layer.grad_m_weight[i] / b1_divisor) / (sqrt(layer.grad_v_weight[i] / b2_divisor) + 1e-12)) 
+#                             - hp.lr * ad.decay * layer.weight[i])
+#     end
+
+#     layer.dobias && @inbounds for i in eachindex(layer.bias)
+#         layer.bias[i] = (layer.bias[i] - 
+#                             hp.lr * ((layer.grad_m_bias[i] / b1_divisor) / (sqrt(layer.grad_v_bias[i] / b2_divisor) + 1e-12)) 
+#                             - hp.lr * ad.decay * layer.bias[i])
+#     end
+# end
+
+
+
+# function update_batchnorm!(layer, hp, t)
+#     bn = layer.normparams
+#     ad = layer.optparams
+#     if isa(bn, BatchNorm) && isa(ad, AdamParam)
+#         ad = bn.optparams
+#         pre_adam_batchnorm!(bn, t)
+#         b1_divisor = 1.0 - ad.b1^t
+#         b2_divisor = 1.0 - ad.b2^t
+
+#         # Update gamma (scale) parameter - no weight decay for batch norm
+#         @inbounds for i in eachindex(bn.gam)
+#             bn.gam[i] = (bn.gam[i] - 
+#                         hp.lr * ((bn.grad_m_gam[i] / b1_divisor) / (sqrt(bn.grad_v_gam[i] / b2_divisor) + 1e-12)))
+#         end
+
+#         # Update beta (shift) parameter - no weight decay for batch norm
+#         @inbounds for i in eachindex(bn.bet)
+#             bn.bet[i] = (bn.bet[i] - 
+#                         hp.lr * ((bn.grad_m_bet[i] / b1_divisor) / (sqrt(bn.grad_v_bet[i] / b2_divisor) + 1e-12)))
+#         end
+#     else
+#         # Simple SGD update if not using Adam/AdamW
+#         @fastmath bn.gam .-= (hp.lr .* bn.grad_gam)
+#         @fastmath bn.bet .-= (hp.lr .* bn.grad_bet)
+#     end
+# end
+
+# function reg_L1_update!(layer::Layer, hp, counter)
+#     @inbounds for i in eachindex(layer.weight)
+#         layer.weight[i] -= hp.lr * (layer.grad_weight[i] + hp.regparm * sign(layer.weight[i]))
+#     end
+
+#     # Separate loop for bias with no regularization
+#     layer.dobias && @inbounds for i in eachindex(layer.bias)
+#         layer.bias[i] -= hp.lr * layer.grad_bias[i]
+#     end
+# end
+
+# TODO probably get rid of this and combine in one weight update function that can do everything
+# function reg_L2_update!(layer::Layer, hp, counter)
+#     @inbounds for i in eachindex(layer.weight)
+#         layer.weight[i] -= hp.lr * (layer.grad_weight[i] + hp.regparm * layer.weight[i])
+#     end
+
+#     # Separate loop for bias with no regularization
+#     layer.dobias && @inbounds for i in eachindex(layer.bias)
+#         layer.bias[i] -= hp.lr * layer.grad_bias[i]
+#     end
+# end
+
+function update_weights!(layer::Layer, hp, t)
+    # Handle Adam/AdamW optimization based on layer's optparams
+    if isa(layer.optparams, AdamParam)
+        ad = layer.optparams
+        pre_adam!(layer, ad, t)
+        b1_divisor = 1.0 - ad.b1^t
+        b2_divisor = 1.0 - ad.b2^t
+
+        # Update weights
+        @inbounds for i in eachindex(layer.weight)
+            # Base Adam update term
+            adam_term = (layer.grad_m_weight[i] / b1_divisor) / (sqrt(layer.grad_v_weight[i] / b2_divisor) + 1e-12)
+            
+            # Add regularization if specified (model-wide property)
+            if hp.reg == :L1
+                adam_term += hp.regparm * sign(layer.weight[i])
+            elseif hp.reg == :L2
+                adam_term += hp.regparm * layer.weight[i]
+            end
+            
+            # Apply learning rate to the gradient update
+            # layer.weight[i] -= hp.lr * adam_term
+            
+            # Apply decoupled weight decay for AdamW
+            if ad.decay > 0
+                layer.weight[i] -= (hp.lr * ad.decay * layer.weight[i]) + (hp.lr * adam_term)
+            else
+                layer.weight[i] -= (hp.lr * adam_term)
+            end
+        end
+
+        # Update biases (no regularization for biases)
+        if layer.dobias
+            @inbounds for i in eachindex(layer.bias)
+                # Base Adam update term
+                adam_term = (layer.grad_m_bias[i] / b1_divisor) / (sqrt(layer.grad_v_bias[i] / b2_divisor) + 1e-12)
+                
+                # Apply learning rate to the gradient update
+                layer.bias[i] -= hp.lr * adam_term
+                
+                # Apply decoupled weight decay for AdamW
+                if ad.decay > 0
+                    layer.bias[i] -= hp.lr  * layer.bias[i]  # we don't do decay on bias term even with Adamw
+                end
+            end
+        end
+    else
+        # Simple SGD update
+        @inbounds for i in eachindex(layer.weight)
+            update = layer.grad_weight[i]
+            if hp.reg == :L1
+                update += hp.regparm * sign(layer.weight[i])
+            elseif hp.reg == :L2
+                update += hp.regparm * layer.weight[i]
+            end
+            layer.weight[i] -= hp.lr * update
+        end
+
+        if layer.dobias
+            @inbounds for i in eachindex(layer.bias)
+                layer.bias[i] -= hp.lr * layer.grad_bias[i]
+            end
+        end
     end
 end
 
-
-function update_batchnorm!(bn::BatchNorm, hp)
-    @fastmath bn.gam .-= (hp.lr .* bn.delta_gam)
-    @fastmath bn.bet .-= (hp.lr .* bn.delta_bet)
-end
-
-function reg_L1_update!(layer::Layer, hp)
-    @inbounds for i in eachindex(layer.weight)
-        layer.weight[i] -= hp.lr * (layer.grad_weight[i] + hp.regparm * sign(layer.weight[i]))
-    end
-
-    # Separate loop for bias with no regularization
-    layer.dobias && @inbounds for i in eachindex(layer.bias)
-        layer.bias[i] -= hp.lr * layer.grad_bias[i]
-    end
-end
-
-function reg_L2_update!(layer::Layer, hp)
-    @inbounds for i in eachindex(layer.weight)
-        layer.weight[i] -= hp.lr * (layer.grad_weight[i] + hp.regparm * layer.weight[i])
-    end
-
-    # Separate loop for bias with no regularization
-    layer.dobias && @inbounds for i in eachindex(layer.bias)
-        layer.bias[i] -= hp.lr * layer.grad_bias[i]
-    end
-end
-
-
-function update_weight_loop!(layers::Vector{<:Layer}, hp)
+function update_weight_loop!(layers::Vector{<:Layer}, hp, counter)
     for lr in layers[begin+1:end]
-        if (typeof(lr) == FlattenLayer) | (typeof(lr) == MaxPoolLayer)
-            continue  # redundant but obvious
+        if isa(lr, FlattenLayer) || isa(lr, MaxPoolLayer)
+            continue  # skip non-parametric layers
         end
-        hp.weight_update_f!(lr, hp)
+        
+        update_weights!(lr, hp, counter)
 
-        if lr.normparams isa BatchNorm  # test if the field is a struct of type BatchNorms
-            update_batchnorm!(lr.normparams, hp)
+        if lr.normparams isa BatchNorm  # update only the batchnorm params
+            update_batchnorm!(lr, hp, counter)
         end
-
     end
 end
-
 
 function train_loop!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size=0, hp=default_hp) where L <: Layer
 
@@ -402,7 +524,7 @@ function train_loop!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size
 
             backprop!(layers, y_part, n_samples)
 
-            update_weight_loop!(layers, hp)
+            update_weight_loop!(layers, hp, counter)
 
             hp.do_stats  && gather_stats!(stats, layers, y_part, counter, batno, e; to_console=false)
 
