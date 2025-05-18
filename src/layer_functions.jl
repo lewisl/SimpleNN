@@ -466,13 +466,23 @@ function layer_forward!(layer::ConvLayer, x::AbstractArray{Float64,4}, batch_siz
         layer.pad_x .= x
     end
 
+    # initialize output z with 0.0 if nobias or with bias
+    if layer.dobias
+        for oc in axes(layer.z, 3)
+            @turbo @views fill!(layer.z[:,:,oc,:], layer.bias[oc])
+        end
+    else
+        fill!(layer.z, 0.0)
+    end
+
+
     # Combine bias initialization with convolution in a single pass
-    @inbounds for b in axes(layer.z, 4)  # batch
+    @turbo for b in axes(layer.z, 4)  # batch
         for oc in axes(layer.z, 3)  # output channels
             for j in axes(layer.z, 2)  # width
                 for i in axes(layer.z, 1)  # height
                     # Initialize with bias or 0.0 and perform convolution in one pass: always zero if layer.dobias == false
-                    layer.z[i, j, oc, b] = layer.bias[oc]                                          # ifelse(layer.dobias, layer.bias[oc], 0.0)
+                    # layer.z[i, j, oc, b] = layer.bias[oc]                                          # ifelse(layer.dobias, layer.bias[oc], 0.0)
                     for ic in axes(layer.weight, 3)  # input channels
                         for fh in axes(layer.weight, 1)  # filter height
                             for fw in axes(layer.weight, 2)  # filter width
@@ -519,7 +529,7 @@ function layer_backward!(layer::ConvLayer, layer_above, n_samples)
 
     layer.normalization_gradf(layer) # either noop or batchnorm_grad!
 
-    @inbounds for b in axes(layer.eps_l, 4)
+    @turbo for b in axes(layer.eps_l, 4)
         for oc in axes(layer.weight, 4)
             for i = 1:H_out-(f_h-1) # prevent filter from extending out of bounds
                 for j = 1:W_out-(f_w-1)
@@ -594,7 +604,7 @@ function layer_forward!(layer::MaxPoolLayer, x::Array{Float64,4}, n_samples)
     fill!(layer.mask, false)
 
     # no stride: the pool window moves across the image edge to edge with no overlapping
-    @inbounds for bn = 1:B
+    for bn = 1:B
         for c = 1:C
             for j = 1:W_out
                 for i = 1:H_out
@@ -649,13 +659,15 @@ end
 
 function layer_forward!(layer::FlattenLayer, x::Array{Float64,4}, batch_size)
     h, w, ch, _ = size(x)
-    @inbounds for b in axes(x, 4)  # iterate over batch dimension  
-        idx = 1
-        for c in axes(x, 3)  # iterate over channels
+    for b in axes(x, 4)  # iterate over batch dimension  
+        @turbo for c in axes(x, 3)  # iterate over channels
+            c_offset = (c-1)*h*w
             for j in axes(x, 2)  # iterate over width
+                j_offset = (j-1)*h
                 for i in axes(x, 1)  # iterate over height
+                    idx = c_offset + j_offset + i
+                    # println("idx ", idx, " tdx ", tdx)
                     layer.a[idx, b] = x[i, j, c, b]
-                    idx += 1
                 end
             end
         end
@@ -670,9 +682,9 @@ function layer_backward!(layer::FlattenLayer, layer_above::LinearLayer, batch_si
 
     # Reshape in-place using explicit indexing
     h, w, ch, _ = size(layer.eps_l)
-    @inbounds for b in 1:batch_size
+    for b in 1:batch_size
         idx = 1
-        for c in 1:ch
+        @turbo for c in 1:ch
             for j in 1:w
                 for i in 1:h
                     layer.eps_l[i, j, c, b] = layer.dl_dflat[idx, b]
@@ -693,7 +705,7 @@ function layer_forward!(layer::LinearLayer, x::Matrix{Float64}, batch_size)
 
     # bias: explicit loop faster than broadcasting
     if layer.dobias
-        for j in axes(layer.z, 2)  # For each column (sample)
+        @turbo for j in axes(layer.z, 2)  # For each column (sample)
             for i in axes(layer.z, 1)  # For each row (output neuron)
                 layer.z[i, j] += layer.bias[i]
             end
@@ -728,7 +740,7 @@ function layer_backward!(layer::LinearLayer, layer_above::LinearLayer, n_samples
     # Compute bias gradient efficiently without allocations
     if layer.dobias
         fill!(layer.grad_bias, 0.0)
-        for j in axes(layer.eps_l, 2)
+        @turbo for j in axes(layer.eps_l, 2)
             for i in axes(layer.eps_l, 1)
                 layer.grad_bias[i] += layer.eps_l[i, j]
             end
@@ -751,13 +763,13 @@ function batchnorm!(layer::LinearLayer)
         mean!(bn.mu, layer.z)
         bn.stddev .= std(layer.z, dims=2)
 
-        layer.z_norm .= (layer.z .- bn.mu) ./ (bn.stddev .+ 1e-12) # normalized: often xhat or zhat
-        layer.z .= layer.z_norm .* bn.gam .+ bn.bet  # shift & scale: often called y
-        bn.mu_run .= bn.mu_run[1] == 0.0 ? bn.mu : 0.95 .* bn.mu_run .+ 0.05 .* bn.mu
-        bn.std_run .= bn.std_run[1] == 0.0 ? bn.stddev : 0.95 .* bn.std_run + 0.05 .* bn.stddev
+        @turbo @. layer.z_norm = (layer.z - bn.mu) / (bn.stddev + 1e-12) # normalized: often xhat or zhat
+        @turbo @. layer.z = layer.z_norm * bn.gam + bn.bet  # shift & scale: often called y
+        @. bn.mu_run = ifelse(bn.mu_run[1] == 0.0, bn.mu, 0.95 * bn.mu_run + 0.05 * bn.mu)
+        @. bn.std_run = ifelse(bn.std_run[1] == 0.0, bn.stddev, 0.95 * bn.std_run + 0.05 * bn.stddev)
     else  # prediction: use running mean and stddev
-        layer.z_norm .= (layer.z .- bn.mu_run) ./ (bn.std_run .+ 1e-12) # normalized: aka xhat or zhat
-        layer.z .= layer.z_norm .* bn.gam .+ bn.bet  # shift & scale: often called y
+        @turbo @. layer.z_norm = (layer.z - bn.mu_run) / (bn.std_run + 1e-12) # normalized: aka xhat or zhat
+        @turbo @. layer.z = layer.z_norm * bn.gam + bn.bet  # shift & scale: often called y
     end
     return
 end
@@ -774,20 +786,20 @@ function batchnorm!(layer::ConvLayer)
             # Pre-compute inverse std for efficiency
             inv_std = 1.0 / (bn.stddev[cidx] + 1e-12)
 
-            ch_z_norm .= (ch_z .- bn.mu[cidx]) .* inv_std
-            ch_z .= ch_z_norm .* bn.gam[cidx] .+ bn.bet[cidx]
+            @turbo @. ch_z_norm = (ch_z - bn.mu[cidx]) * inv_std
+            @turbo @. ch_z = ch_z_norm * bn.gam[cidx] + bn.bet[cidx]
         end
 
         # Update running statistics
-        bn.mu_run .= ifelse(bn.mu_run[1] == 0.0, bn.mu, 0.95 .* bn.mu_run .+ 0.05 .* bn.mu)
-        bn.std_run .= ifelse(bn.std_run[1] == 0.0, bn.stddev, 0.95 .* bn.std_run + 0.05 .* bn.stddev)
+        @. bn.mu_run = ifelse(bn.mu_run[1] == 0.0, bn.mu, 0.95 * bn.mu_run + 0.05 * bn.mu)
+        @. bn.std_run = ifelse(bn.std_run[1] == 0.0, bn.stddev, 0.95 * bn.std_run + 0.05 * bn.stddev)
     else
         @inbounds @fastmath for (cidx, ch_z, ch_z_norm) in zip(1:c, eachslice(layer.z, dims=3), eachslice(layer.z_norm, dims=3))
             # Pre-compute inverse std for efficiency
             inv_std = 1.0 / (bn.std_run[cidx] + 1e-12)
 
-            ch_z_norm .= (ch_z .- bn.mu_run[cidx]) .* inv_std
-            ch_z .= ch_z_norm .* bn.gam[cidx] .+ bn.bet[cidx]
+            @turbo @. ch_z_norm = (ch_z - bn.mu_run[cidx]) * inv_std
+            @turbo @. ch_z = ch_z_norm * bn.gam[cidx] + bn.bet[cidx]
         end
     end
     return
@@ -799,8 +811,20 @@ function batchnorm_grad!(layer::LinearLayer)
     mb = size(layer.eps_l, 2)
     inverse_mb_size = 1.0 / Float64(mb)
 
-    bn.grad_bet .= sum(layer.eps_l, dims=2) .* inverse_mb_size  # ./ mb
-    bn.grad_gam .= sum(layer.eps_l .* layer.z_norm, dims=2)  .* inverse_mb_size  # ./ mb
+    # replace one-liner with vectorized loop: bn.grad_bet .= sum(layer.eps_l, dims=2) .* inverse_mb_size  # ./ mb
+    fill!(bn.grad_bet, 0.0)
+    @turbo for j in axes(layer.eps_l, 2)
+        for i in axes(layer.eps_l, 1)
+            bn.grad_bet[j] += layer.eps_l[i,j] * inverse_mb_size
+        end
+    end 
+    # replace one-liner with vectorized loop: bn.grad_gam .= sum(layer.eps_l .* layer.z_norm, dims=2)  .* inverse_mb_size  # ./ mb
+    fill!(bn.grad_gam, 0.0)
+    @turbo for j in axes(layer.eps_l, 2)
+        for i in axes(layer.eps_l, 1)
+            bn.grad_gam[j] += layer.eps_l[i,j] * layer.z_norm[i,j] * inverse_mb_size
+        end
+    end
 
     layer.eps_l .= bn.gam .* layer.eps_l  # often called delta_z_norm at this stage
     # often called delta_z, dx, dout, or dy
@@ -829,7 +853,7 @@ function batchnorm_grad!(layer::ConvLayer)
         # - sum of delta_z_norm * z_norm
         ch_sum = 0.0
         ch_prod_sum = 0.0
-        @inbounds for i in eachindex(ch_z)
+        @turbo for i in eachindex(ch_z)
             ch_sum += ch_z[i]
             ch_prod_sum += ch_z[i] * ch_z_norm[i]
         end
@@ -837,7 +861,7 @@ function batchnorm_grad!(layer::ConvLayer)
         # Step 3: Compute final gradient (delta_z)
         # Formula: (1/mb) * (1/stddev) * (mb*delta_z_norm - sum(delta_z_norm) - z_norm*sum(delta_z_norm*z_norm))
         scale = (1.0 / mb) / (bn.stddev[cidx] + 1e-12)
-        @inbounds for i in eachindex(ch_z)
+        @turbo for i in eachindex(ch_z)
             ch_z[i] = scale * (mb * ch_z[i] - ch_sum - ch_z_norm[i] * ch_prod_sum)
         end
     end
@@ -848,19 +872,19 @@ end
 # =====================
 
 function relu!(layer)
-    @inbounds @fastmath begin
-        for i in eachindex(layer.z)
-            layer.a[i] = ifelse(layer.z[i] >= 0.0, layer.z[i], 0.0) # no allocations
-        end
+    # @inbounds @fastmath begin
+    @turbo for i in eachindex(layer.z)
+        layer.a[i] = ifelse(layer.z[i] >= 0.0, layer.z[i], 0.0) # no allocations
     end
+    # end
 end
 
 function leaky_relu!(layer)
-    @inbounds @fastmath begin
-        for i in eachindex(layer.z)
+    # @inbounds @fastmath begin
+        @turbo for i in eachindex(layer.z)
             layer.a[i] = ifelse(layer.z[i] >= 0.0, layer.z[i], layer.adj * layer.x[i]) # no allocations
         end
-    end
+    # end
 end
 
 
@@ -869,13 +893,13 @@ end
 
 
 function relu_grad!(layer)   # I suppose this is really leaky_relu...
-    @inbounds for i = eachindex(layer.z)  # when passed any array, this will update in place
+    @turbo for i = eachindex(layer.z)  # when passed any array, this will update in place
         layer.grad_a[i] = ifelse(layer.z[i] > 0.0, 1.0, 0.0)  # prevent vanishing gradients by not using 0.0
     end
 end
 
 function leaky_relu_grad!(layer)   # I suppose this is really leaky_relu...
-    @inbounds for i = eachindex(layer.z)  # when passed any array, this will update in place
+    @turbo for i = eachindex(layer.z)  # when passed any array, this will update in place
         layer.grad_a[i] = ifelse(layer.z[i] > 0.0, 1.0, layer.adj)  # prevent vanishing gradients by not using 0.0
     end
 end
@@ -890,26 +914,24 @@ function dloss_dz!(layer, target)
 end
 
 # tested to have no allocations
-function softmax!(layer, adj=0.0) # adj arg required for calling loop: not used
-    @inbounds for c in axes(layer.z, 2)
+function softmax!(layer, adj=0.0)
+    for c in axes(layer.z, 2)
         # Find maximum in this column
         max_val = typemin(Float64)
-        for i in axes(layer.z, 1)
-            if layer.z[i, c] > max_val
-                max_val = layer.z[i, c]
-            end
+        @turbo for i in axes(layer.z, 1)
+            max_val = max(max_val, layer.z[i, c])
         end
 
         # Compute exp and sum in one pass
         sum_exp = 0.0
-        for i in axes(layer.z, 1)
+        @turbo for i in axes(layer.z, 1)
             layer.a[i, c] = exp(layer.z[i, c] - max_val)
             sum_exp += layer.a[i, c]
         end
 
         # Normalize
         sum_exp = sum_exp + 1e-12  # Add epsilon for numerical stability
-        for i in axes(layer.z, 1)
+        @turbo for i in axes(layer.z, 1)
             layer.a[i, c] /= sum_exp
         end
     end
@@ -971,23 +993,3 @@ end
         grad_v_lrparam[i] = ad.b2 * grad_v_lrparam[i] + b2_term * grad_lrparam[i]^2
     end
 end
-
-# same as adam until we actually to the weight update
-# function adamw!(layer, t)
-#     bn = layer.normparam   # will either be a BatchNorm or a NoNorm
-#     ad = layer.optparam
-
-#     adamw_helper!(layer.grad_m_weight, layer.grad_v_weight, layer.grad_weight, ad, t)
-#     layer.dobias && (adamw_helper!(layer.grad_m_bias, layer.grad_v_bias, layer.grad_bias, ad, t))
-        
-#     if isa(bn, BatchNorm) # yes, doing batchnorm, and optimization of batch_norm params
-#         adamw_helper!(bn.grad_m_gam, bn.grad_v_gam, bn.grad_gam, ad, t)
-#         adam_helper!(bn.grad_m_bet, bn.grad_v_bet, bn.grad_bet, ad, t)     
-#     end
-# end
-
-# function adamw_helper!(grad_m_lrparam, grad_v_lrparam, grad_lrparam, ad,t)
-#     @. grad_m_lrparam = ad.b1 * grad_m_lrparam + (1.0 - ad.b1) * grad_lrparam  
-#     @. grad_v_lrparam = ad.b2 * grad_v_lrparam + (1.0 - ad.b2) * grad_lrparam.^2   
-#     # @. grad_weight = (grad_m_weight / (1.0 - ad.b1^t)) / sqrt(grad_v_weight / (1.0 - ad.b2^t) + ad.ltl_eps)
-# end

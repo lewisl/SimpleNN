@@ -54,10 +54,10 @@ three_linear = LayerSpec[
 preptest = true
 full_batch = 60_000
 minibatch_size = 50
-epochs = 1  # 15 epochs yields near perfect training convergence
+epochs = 10  # 15 epochs yields near perfect training convergence
 layerspecs = one_conv
 
-hp = HyperParameters(lr=0.05, reg=:none, regparm=0.00043, do_stats=false)  # reg=:L2, regparm=0.00043,
+hp = HyperParameters(lr=0.001, reg=:none, regparm=0.00043, do_stats=false)  # reg=:L2, regparm=0.00043,
 
 # %%
 
