@@ -1,3 +1,3 @@
-# ConvLayer
+# SimpleNN
 
 This is the readme file.

@@ -205,3 +205,33 @@ hp = HyperParameters(lr=0.1, reg=:L2, regparm=0.00043, do_stats=false)
 Results:
 > Training: Accuracy 0.9993166666666666 Cost 0.005766895445629323
 > Test: 0.9817 Cost 0.11920180572947686
+
+#### two_conv for epochs with batch normalization, ADAM, L2 reg
+
+Model:
+```Julia
+two_conv = LayerSpec[
+    inputlayerspec(name=:input, h=28, w=28, outch=1)
+    convlayerspec(name=:conv1, outch=32, f_h=3, f_w=3, activation=:relu,normalization=:batchnorm, optimization=:adam)
+    # maxpoollayerspec(name=:maxpool1, f_h=2, f_w=2)
+    convlayerspec(name=:conv2, outch=16, f_h=3, f_w=3, activation=:relu,normalization=:batchnorm, optimization=:adam)
+    maxpoollayerspec(name=:maxpool2, f_h=2, f_w=2)
+    flattenlayerspec(name=:flatten)
+    linearlayerspec(name=:linear1, output=200,normalization=:batchnorm, optimization=:adam)
+    LayerSpec(name=:output, h=10, kind=:linear, activation=:softmax)
+];
+```
+
+Hyperparamaters:
+```Julia
+full_batch = 60_000
+minibatch_size = 50
+epochs = 5  # 15 epochs yields near perfect training convergence with dense linear layers
+layerspecs = two_conv
+
+hp = HyperParameters(lr=0.0005, reg=:L2, regparm=0.00043, do_stats=false)
+```
+
+Results:
+> Training: (0.9892666666666666, 0.06495281077782712)
+> Test: (0.9749, 0.1374551953107863)

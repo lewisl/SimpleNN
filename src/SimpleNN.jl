@@ -18,8 +18,9 @@ using Statistics
 using LinearAlgebra
 using BenchmarkTools
 
-
+include("data_layers.jl")
 include("layer_functions.jl")
+include("modifiers.jl")
 include("training.jl")
 include("mnist_fun.jl")
 
@@ -38,7 +39,8 @@ export
     convlayerspec,      # constructor with only inputs needed for a convolutional layer
     linearlayerspec,    # constructor with only inputs needed for a linear layer
     flattenlayerspec,   # constructor with only inputs needed for a flatten layer
-    maxpoollayerspec    # constructor with only inputs needed for a maxpooling layer
+    maxpoollayerspec,    # constructor with only inputs needed for a maxpooling layer
+    inputlayerspec      # constructor for the spec of the input layer
 
 # functions you can use
 export

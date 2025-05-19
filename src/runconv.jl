@@ -13,36 +13,36 @@ using SimpleNN
 
 # 64 channels is not great
 one_conv = LayerSpec[
-    LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
-    convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, normalization=:batchnorm, optimization=:adamw)  # , normalization=:batchnorm  , optimization=:adamw
+    inputlayerspec(h=28, w=28, outch=1, name=:input)
+    convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, normalization=:batchnorm, optimization=:adam)  # , normalization=:batchnorm  , optimization=:adamw
     maxpoollayerspec(name=:maxpool1, f_h=2, f_w=2)
     flattenlayerspec(name=:flatten)
-    linearlayerspec(output=200, activation=:relu, name=:linear1, normalization=:batchnorm, optimization=:adamw)
+    linearlayerspec(output=200, activation=:relu, name=:linear1, normalization=:batchnorm, optimization=:adam)
     LayerSpec(h=10, kind=:linear, name=:output, activation=:softmax)
 ];
 
 
 two_conv = LayerSpec[
-    LayerSpec(name=:input, h=28, w=28, outch=1, kind=:input)
-    convlayerspec(name=:conv1, outch=24, f_h=3, f_w=3, activation=:relu)
-    maxpoollayerspec(name=:maxpool1, f_h=2, f_w=2)
-    convlayerspec(name=:conv2, outch=48, f_h=3, f_w=3, activation=:relu)
+    inputlayerspec(name=:input, h=28, w=28, outch=1)
+    convlayerspec(name=:conv1, outch=32, f_h=3, f_w=3, activation=:relu,normalization=:batchnorm, optimization=:adam)
+    # maxpoollayerspec(name=:maxpool1, f_h=2, f_w=2)
+    convlayerspec(name=:conv2, outch=16, f_h=3, f_w=3, activation=:relu,normalization=:batchnorm, optimization=:adam)
     maxpoollayerspec(name=:maxpool2, f_h=2, f_w=2)
     flattenlayerspec(name=:flatten)
-    linearlayerspec(name=:linear1, output=200)
+    linearlayerspec(name=:linear1, output=200,normalization=:batchnorm, optimization=:adam)
     LayerSpec(name=:output, h=10, kind=:linear, activation=:softmax)
 ];
 
 two_linear = LayerSpec[
-    LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
+    inputlayerspec(h=28, w=28, outch=1, name=:input)
     flattenlayerspec(name=:flatten)
-    linearlayerspec(name=:linear1, output=256)   # normalization=:batchnorm
-    linearlayerspec(name=:linear2, output=256)
+    linearlayerspec(name=:linear1, output=256, normalization=:batchnorm,  optimization=:adam)   # normalization=:batchnorm
+    linearlayerspec(name=:linear2, output=256, normalization=:batchnorm,  optimization=:adam)
     LayerSpec(h=10, kind=:linear, name=:output, activation=:softmax)
 ];
 
 three_linear = LayerSpec[
-    LayerSpec(h=28, w=28, outch=1, kind=:input, name=:input)
+    inputlayerspec(h=28, w=28, outch=1,  name=:input)
     flattenlayerspec(name=:flatten)
     linearlayerspec(name=:linear1, output=300, normalization=:batchnorm)
     linearlayerspec(name=:linear2, output=300, normalization=:batchnorm)
@@ -54,10 +54,10 @@ three_linear = LayerSpec[
 preptest = true
 full_batch = 60_000
 minibatch_size = 50
-epochs = 10  # 15 epochs yields near perfect training convergence
+epochs = 5  # 15 epochs yields near perfect training convergence with dense linear layers
 layerspecs = one_conv
 
-hp = HyperParameters(lr=0.001, reg=:none, regparm=0.00043, do_stats=false)  # reg=:L2, regparm=0.00043,
+hp = HyperParameters(lr=0.0005, reg=:L2, regparm=0.00043, do_stats=false)  # reg=:L2, regparm=0.00043,
 
 # %%
 
