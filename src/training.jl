@@ -19,12 +19,12 @@ using LoopVectorization
 
 
 Base.@kwdef mutable struct HyperParameters
-    lr::Float64 = 0.02         # learning rate
+    lr::ELT = 0.02f0         # learning rate
     reg::Symbol = :none      # one of :none, :L1, :L2
-    regparm::Float64 = 0.0004  # typically called lambda
+    regparm::ELT = 0.0004f0  # typically called lambda
     do_stats::Bool = true
 
-    function HyperParameters(lr::Float64, reg::Symbol, regparm::Float64, do_stats::Bool)
+    function HyperParameters(lr::ELT, reg::Symbol, regparm::ELT, do_stats::Bool)
         if !in(reg, [:none, :L1, :L2])
             error("reg must be one of :none, :L1, :l2. Input was :$reg")
         end
@@ -35,8 +35,8 @@ end
 default_hp = HyperParameters()     # to pass defaults into training_loop
 
 Base.@kwdef mutable struct StatSeries
-    acc::Array{Float64,1} = Float64[]
-    cost::Array{Float64,1} = Float[]
+    acc::Array{ELT,1} = ELT[]
+    cost::Array{ELT,1} = ELT[]
     batch_size::Int = 0
     epochs::Int = 0
     minibatch_size = 0
@@ -84,17 +84,17 @@ function show_layer_specs(layers)
     return
 end
 
-function he_initialize(weight_dims::NTuple{4,Int64}; scale=2.0, adj=0.0)
+function he_initialize(weight_dims::NTuple{4,Int64}; scale=2.0f0, adj=0.0f0)
     k_h, k_w, in_channels, out_channels = weight_dims
     fan_in = k_h * k_w * in_channels
-    scale_factor = scale / (1.0 + adj^2) / Float64(fan_in)
+    scale_factor = scale / (1.0f0 + adj^2) / ELT(fan_in)
     randn(k_h, k_w, in_channels, out_channels) .* sqrt(scale_factor)
 end
 
-function he_initialize(weight_dims::NTuple{2,Int64}; scale=2.0, adj=0.0)
+function he_initialize(weight_dims::NTuple{2,Int64}; scale=2.0f0, adj=0.0f0)
     # adj is typically for leaky relu
     n_in, n_out = weight_dims
-    scale_factor = scale / (1.0 + adj^2) / Float64(n_in)
+    scale_factor = scale / (1.0f0 + adj^2) / ELT(n_in)
     randn(n_in, n_out) .* sqrt(scale_factor)
 end
 
@@ -120,7 +120,7 @@ function allocate_layers(lsvec::Vector{LayerSpec}, n_samples)
                         out_h=lr.h,
                         out_w=lr.w,
                         outch=lr.outch,
-                        a=zeros(lr.h, lr.w, lr.outch, n_samples),
+                        a=zeros(ELT, lr.h, lr.w, lr.outch, n_samples),
                     ))
             end
             continue  # skip the ifs and go to next lr
@@ -143,8 +143,8 @@ end
 function allocate_stats(batch_size, minibatch_size, epochs)
     no_of_batches = div(batch_size, minibatch_size)
     stats = StatSeries(
-        acc=zeros(no_of_batches * epochs),
-        cost=zeros(no_of_batches * epochs),
+        acc=zeros(ELT, no_of_batches * epochs),
+        cost=zeros(ELT, no_of_batches * epochs),
         batch_size=batch_size,
         epochs=epochs,
         minibatch_size=minibatch_size)
@@ -234,30 +234,30 @@ end
 # ============================
 
 
-function cross_entropy_cost(pred::AbstractMatrix{Float64}, target::AbstractMatrix{Float64}, n_samples)
+function cross_entropy_cost(pred::AbstractMatrix{ELT}, target::AbstractMatrix{ELT}, n_samples)
     # this may not be obvious, but it is a non-allocating version
     n = n_samples
-    log_sum1 = 0.0
-    log_sum2 = 0.0
+    log_sum1 = 0.0f0
+    log_sum2 = 0.0f0
 
     @inbounds for i in eachindex(pred)
         # First term: target * log(max(pred, 1e-20))
-        pred_val = max(pred[i], 1e-20)
+        pred_val = max(pred[i], 1f-20)
         log_sum1 += target[i] * log(pred_val)
 
         # Second term: (1-target) * log(max(1-pred, 1e-20))
-        inv_pred = max(1.0 - pred[i], 1e-20)
-        log_sum2 += (1.0 - target[i]) * log(inv_pred)
+        inv_pred = max(1.0f0 - pred[i], 1f-20)
+        log_sum2 += (1.0f0 - target[i]) * log(inv_pred)
     end
 
-    return (-1.0 / n) * (log_sum1 + log_sum2)
+    return (-1.0f0 / n) * (log_sum1 + log_sum2)
 end
 
 
-function mse_cost(targets, predictions, n, theta=[], lambda=1.0, reg="", output_layer=3)
-    @fastmath cost = (1.0 / (2.0 * n)) .* sum((targets .- predictions) .^ 2.0)
+function mse_cost(targets, predictions, n, theta=[], lambda=1.0f0, reg="", output_layer=3)
+    @fastmath cost = (1.0f0 / (2.0f0 * n)) .* sum((targets .- predictions) .^ 2.0f0)
     @fastmath if reg == "L2"  # set reg="" if not using regularization
-        regterm = lambda/(2.0 * n) .* sum([dot(th, th) for th in theta[2:output_layer]])
+        regterm = lambda/(2.0f0 * n) .* sum([dot(th, th) for th in theta[2:output_layer]])
         cost = cost + regterm
     end
     return cost
@@ -299,18 +299,18 @@ function update_batchnorm!(layer, hp, t)
     ad = layer.optparams
     if isa(bn, BatchNorm) && isa(ad, AdamParam)
         pre_adam_batchnorm!(bn, ad, t)
-        b1_divisor = 1.0 / (1.0 - ad.b1^t)
-        b2_divisor = 1.0 / (1.0 - ad.b2^t)
+        b1_divisor = 1.0f0 / (1.0f0 - ad.b1^t)
+        b2_divisor = 1.0f0 / (1.0f0 - ad.b2^t)
 
         # Update gamma (scale) parameter - no weight decay for batch norm
         @turbo for i in eachindex(bn.gam)
-            adam_term = (bn.grad_m_gam[i] * b1_divisor) / (sqrt(bn.grad_v_gam[i] * b2_divisor) + 1e-12)
+            adam_term = (bn.grad_m_gam[i] * b1_divisor) / (sqrt(bn.grad_v_gam[i] * b2_divisor) + IT)
             bn.gam[i] -= hp.lr * adam_term
         end
 
         # Update beta (shift) parameter - no weight decay for batch norm
         @turbo for i in eachindex(bn.bet)
-            adam_term = (bn.grad_m_bet[i] * b1_divisor) / (sqrt(bn.grad_v_bet[i] * b2_divisor) + 1e-12)
+            adam_term = (bn.grad_m_bet[i] * b1_divisor) / (sqrt(bn.grad_v_bet[i] * b2_divisor) + IT)
             bn.bet[i] -= hp.lr * adam_term
         end
     else
@@ -328,13 +328,13 @@ function update_weights!(layer::Layer, hp, t)
     if isa(layer.optparams, AdamParam)
         ad = layer.optparams
         pre_adam!(layer, ad, t)
-        b1_divisor = 1.0 / (1.0 - ad.b1^t)
-        b2_divisor = 1.0 / (1.0 - ad.b2^t)
+        b1_divisor = 1.0f0 / (1.0f0 - ad.b1^t)
+        b2_divisor = 1.0f0 / (1.0f0 - ad.b2^t)
 
         # Update weights with @turbo for better performance
         @turbo for i in eachindex(layer.weight)
             # Base Adam update term
-            adam_term = (layer.grad_m_weight[i] * b1_divisor) / (sqrt(layer.grad_v_weight[i] * b2_divisor) + 1e-12)
+            adam_term = (layer.grad_m_weight[i] * b1_divisor) / (sqrt(layer.grad_v_weight[i] * b2_divisor) + IT)
             layer.weight[i] -= hp.lr * adam_term
         end
 
@@ -359,7 +359,7 @@ function update_weights!(layer::Layer, hp, t)
         # Update biases with @turbo
         if layer.dobias
             @turbo for i in eachindex(layer.bias)
-                adam_term = (layer.grad_m_bias[i] * b1_divisor) / (sqrt(layer.grad_v_bias[i] * b2_divisor) + 1e-12)
+                adam_term = (layer.grad_m_bias[i] * b1_divisor) / (sqrt(layer.grad_v_bias[i] * b2_divisor) + IT)
                 layer.bias[i] -= hp.lr * adam_term
             end
         end
@@ -371,13 +371,13 @@ function update_weights!(layer::Layer, hp, t)
             
             # Update gamma (scale) parameter
             @turbo for i in eachindex(bn.gam)
-                adam_term = (bn.grad_m_gam[i] * b1_divisor) / (sqrt(bn.grad_v_gam[i] * b2_divisor) + 1e-12)
+                adam_term = (bn.grad_m_gam[i] * b1_divisor) / (sqrt(bn.grad_v_gam[i] * b2_divisor) + IT)
                 bn.gam[i] -= hp.lr * adam_term
             end
 
             # Update beta (shift) parameter
             @turbo for i in eachindex(bn.bet)
-                adam_term = (bn.grad_m_bet[i] * b1_divisor) / (sqrt(bn.grad_v_bet[i] * b2_divisor) + 1e-12)
+                adam_term = (bn.grad_m_bet[i] * b1_divisor) / (sqrt(bn.grad_v_bet[i] * b2_divisor) + IT)
                 bn.bet[i] -= hp.lr * adam_term
             end
         end
@@ -520,8 +520,8 @@ function minibatch_prediction(layers::Vector{Layer}, x, y, costfunc = cross_entr
     total_cnt = 0
     total_cost = 0
     # pre-allocate outcomes for use in loop
-    preds = zeros(out, n_samples)
-    targets = zeros(out, n_samples)
+    preds = zeros(ELT, out, n_samples)
+    targets = zeros(ELT, out, n_samples)
 
     for batno in 1:mini_num
         if mini_num > 1
@@ -565,10 +565,10 @@ end
 # ============================
 
 function random_onehot(i, j)
-    arr = zeros(i, j)
+    arr = zeros(ELT, i, j)
     for n in axes(arr, 2)
         rowselector = rand(1:10)
-        arr[rowselector, n] = 1.0
+        arr[rowselector, n] = 1.0f0
     end
     return arr
 end

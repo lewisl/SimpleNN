@@ -46,12 +46,12 @@ function batchnorm!(layer::LinearLayer)
         mean!(bn.mu, layer.z)
         bn.stddev .= std(layer.z, dims=2)
 
-        @turbo @. layer.z_norm = (layer.z - bn.mu) / (bn.stddev + 1e-12) # normalized: often xhat or zhat
+        @turbo @. layer.z_norm = (layer.z - bn.mu) / (bn.stddev + IT) # normalized: often xhat or zhat
         @turbo @. layer.z = layer.z_norm * bn.gam + bn.bet  # shift & scale: often called y
-        @. bn.mu_run = ifelse(bn.mu_run[1] == 0.0, bn.mu, 0.95 * bn.mu_run + 0.05 * bn.mu)
-        @. bn.std_run = ifelse(bn.std_run[1] == 0.0, bn.stddev, 0.95 * bn.std_run + 0.05 * bn.stddev)
+        @. bn.mu_run = ifelse(bn.mu_run[1] == 0.0f0, bn.mu, 0.95 * bn.mu_run + 0.05f0 * bn.mu)
+        @. bn.std_run = ifelse(bn.std_run[1] == 0.0f0, bn.stddev, 0.95 * bn.std_run + 0.05f0 * bn.stddev)
     else  # prediction: use running mean and stddev
-        @turbo @. layer.z_norm = (layer.z - bn.mu_run) / (bn.std_run + 1e-12) # normalized: aka xhat or zhat
+        @turbo @. layer.z_norm = (layer.z - bn.mu_run) / (bn.std_run + IT) # normalized: aka xhat or zhat
         @turbo @. layer.z = layer.z_norm * bn.gam + bn.bet  # shift & scale: often called y
     end
     return
@@ -67,19 +67,19 @@ function batchnorm!(layer::ConvLayer)
             bn.stddev[cidx] = std(ch_z, corrected=false)
 
             # Pre-compute inverse std for efficiency
-            inv_std = 1.0 / (bn.stddev[cidx] + 1e-12)
+            inv_std = 1.0f0 / (bn.stddev[cidx] + IT)
 
             @turbo @. ch_z_norm = (ch_z - bn.mu[cidx]) * inv_std
             @turbo @. ch_z = ch_z_norm * bn.gam[cidx] + bn.bet[cidx]
         end
 
         # Update running statistics
-        @. bn.mu_run = ifelse(bn.mu_run[1] == 0.0, bn.mu, 0.95 * bn.mu_run + 0.05 * bn.mu)
-        @. bn.std_run = ifelse(bn.std_run[1] == 0.0, bn.stddev, 0.95 * bn.std_run + 0.05 * bn.stddev)
+        @. bn.mu_run = ifelse(bn.mu_run[1] == 0.0f0, bn.mu, 0.95 * bn.mu_run + 0.05f0 * bn.mu)
+        @. bn.std_run = ifelse(bn.std_run[1] == 0.0f0, bn.stddev, 0.95 * bn.std_run + 0.05f0 * bn.stddev)
     else
         @inbounds @fastmath for (cidx, ch_z, ch_z_norm) in zip(1:c, eachslice(layer.z, dims=3), eachslice(layer.z_norm, dims=3))
             # Pre-compute inverse std for efficiency
-            inv_std = 1.0 / (bn.std_run[cidx] + 1e-12)
+            inv_std = 1.0f0 / (bn.std_run[cidx] + IT)
 
             @turbo @. ch_z_norm = (ch_z - bn.mu_run[cidx]) * inv_std
             @turbo @. ch_z = ch_z_norm * bn.gam[cidx] + bn.bet[cidx]
@@ -92,26 +92,26 @@ end
 function batchnorm_grad!(layer::LinearLayer)
     bn = layer.normparams
     mb = size(layer.eps_l, 2)
-    inverse_mb_size = 1.0 / Float64(mb)
+    inverse_mb_size = 1.0f0 / ELT(mb)
 
     # replace one-liner with vectorized loop: bn.grad_bet .= sum(layer.eps_l, dims=2) .* inverse_mb_size  # ./ mb
-    fill!(bn.grad_bet, 0.0)
+    fill!(bn.grad_bet, 0.0f0)
     @turbo for j in axes(layer.eps_l, 2)
         for i in axes(layer.eps_l, 1)
             bn.grad_bet[j] += layer.eps_l[i,j] * inverse_mb_size
         end
     end 
     # replace one-liner with vectorized loop: bn.grad_gam .= sum(layer.eps_l .* layer.z_norm, dims=2)  .* inverse_mb_size  # ./ mb
-    fill!(bn.grad_gam, 0.0)
+    fill!(bn.grad_gam, 0.0f0)
     @turbo for j in axes(layer.eps_l, 2)
         for i in axes(layer.eps_l, 1)
             bn.grad_gam[j] += layer.eps_l[i,j] * layer.z_norm[i,j] * inverse_mb_size
         end
     end
 
-    layer.eps_l .= bn.gam .* layer.eps_l  # often called delta_z_norm at this stage
-    # often called delta_z, dx, dout, or dy
-    layer.eps_l .= (inverse_mb_size .* (1.0 ./ (bn.stddev .+ 1e-12)) .*
+    layer.eps_l .= bn.gam .* layer.eps_l  # often called dELTa_z_norm at this stage
+    # often called dELTa_z, dx, dout, or dy
+    layer.eps_l .= (inverse_mb_size .* (1.0f0 ./ (bn.stddev .+ IT)) .*
                     (mb .* layer.eps_l .- sum(layer.eps_l, dims=2) .-
                     layer.z_norm .* sum(layer.eps_l .* layer.z_norm, dims=2)))   # replace with non-allocating approach
 end
@@ -120,7 +120,7 @@ end
 function batchnorm_grad!(layer::ConvLayer)
     bn = layer.normparams
     (_, _, c, mb) = size(layer.pad_next_eps)
-    inverse_mb_size = 1.0 / Float64(mb)
+    inverse_mb_size = 1.0f0 / ELT(mb)
 
 
     # Compute gradients for beta and gamma
@@ -128,22 +128,22 @@ function batchnorm_grad!(layer::ConvLayer)
     bn.grad_gam .= reshape(sum(layer.pad_next_eps .* layer.z_norm, dims=(1, 2, 4)), c) .* inverse_mb_size  # ./ mb
 
     @inbounds @fastmath for (cidx, ch_z, ch_z_norm) in zip(1:c, eachslice(layer.pad_next_eps, dims=3), eachslice(layer.z_norm,dims=3))
-        # Step 1: Scale by gamma (delta_z_norm)
+        # Step 1: Scale by gamma (dELTa_z_norm)
         ch_z .= bn.gam[cidx] .* ch_z
 
         # Step 2: Compute statistics needed for gradient
-        # - sum of delta_z_norm
-        # - sum of delta_z_norm * z_norm
-        ch_sum = 0.0
-        ch_prod_sum = 0.0
+        # - sum of dELTa_z_norm
+        # - sum of dELTa_z_norm * z_norm
+        ch_sum = 0.0f0
+        ch_prod_sum = 0.0f0
         @turbo for i in eachindex(ch_z)
             ch_sum += ch_z[i]
             ch_prod_sum += ch_z[i] * ch_z_norm[i]
         end
 
-        # Step 3: Compute final gradient (delta_z)
-        # Formula: (1/mb) * (1/stddev) * (mb*delta_z_norm - sum(delta_z_norm) - z_norm*sum(delta_z_norm*z_norm))
-        scale = (1.0 / mb) / (bn.stddev[cidx] + 1e-12)
+        # Step 3: Compute final gradient (dELTa_z)
+        # Formula: (1/mb) * (1/stddev) * (mb*dELTa_z_norm - sum(dELTa_z_norm) - z_norm*sum(dELTa_z_norm*z_norm))
+        scale = (1.0f0 / mb) / (bn.stddev[cidx] + IT)
         @turbo for i in eachindex(ch_z)
             ch_z[i] = scale * (mb * ch_z[i] - ch_sum - ch_z_norm[i] * ch_prod_sum)
         end
@@ -157,7 +157,7 @@ end
 function relu!(layer)
     # @inbounds @fastmath begin
     @turbo for i in eachindex(layer.z)
-        layer.a[i] = ifelse(layer.z[i] >= 0.0, layer.z[i], 0.0) # no allocations
+        layer.a[i] = ifelse(layer.z[i] >= 0.0f0, layer.z[i], 0.0f0) # no allocations
     end
     # end
 end
@@ -165,7 +165,7 @@ end
 function leaky_relu!(layer)
     # @inbounds @fastmath begin
         @turbo for i in eachindex(layer.z)
-            layer.a[i] = ifelse(layer.z[i] >= 0.0, layer.z[i], layer.adj * layer.x[i]) # no allocations
+            layer.a[i] = ifelse(layer.z[i] >= 0.0f0, layer.z[i], layer.adj * layer.x[i]) # no allocations
         end
     # end
 end
@@ -177,13 +177,13 @@ end
 
 function relu_grad!(layer)   # I suppose this is really leaky_relu...
     @turbo for i = eachindex(layer.z)  # when passed any array, this will update in place
-        layer.grad_a[i] = ifelse(layer.z[i] > 0.0, 1.0, 0.0)  # prevent vanishing gradients by not using 0.0
+        layer.grad_a[i] = ifelse(layer.z[i] > 0.0f0, 1.0f0, 0.0f0)  # prevent vanishing gradients by not using 0.0f0
     end
 end
 
 function leaky_relu_grad!(layer)   # I suppose this is really leaky_relu...
     @turbo for i = eachindex(layer.z)  # when passed any array, this will update in place
-        layer.grad_a[i] = ifelse(layer.z[i] > 0.0, 1.0, layer.adj)  # prevent vanishing gradients by not using 0.0
+        layer.grad_a[i] = ifelse(layer.z[i] > 0.0f0, 1.0f0, layer.adj)  # prevent vanishing gradients by not using 0.0f0
     end
 end
 
@@ -197,23 +197,23 @@ function dloss_dz!(layer, target)
 end
 
 # tested to have no allocations
-function softmax!(layer, adj=0.0)
+function softmax!(layer, adj=0.0f0)
     for c in axes(layer.z, 2)
         # Find maximum in this column
-        max_val = typemin(Float64)
+        max_val = typemin(ELT)
         @turbo for i in axes(layer.z, 1)
             max_val = max(max_val, layer.z[i, c])
         end
 
         # Compute exp and sum in one pass
-        sum_exp = 0.0
+        sum_exp = 0.0f0
         @turbo for i in axes(layer.z, 1)
             layer.a[i, c] = exp(layer.z[i, c] - max_val)
             sum_exp += layer.a[i, c]
         end
 
         # Normalize
-        sum_exp = sum_exp + 1e-12  # Add epsilon for numerical stability
+        sum_exp = sum_exp + IT  # Add epsilon for numerical stability
         @turbo for i in axes(layer.z, 1)
             layer.a[i, c] /= sum_exp
         end
@@ -221,11 +221,11 @@ function softmax!(layer, adj=0.0)
     return
 end
 
-function logistic!(layer, adj=0.0)
-    @fastmath layer.a .= 1.0 ./ (1.0 .+ exp.(.-layer.z))
+function logistic!(layer, adj=0.0f0)
+    @fastmath layer.a .= 1.0f0 ./ (1.0f0 .+ exp.(.-layer.z))
 end
 
-function regression!(layer, adj=0.0)
+function regression!(layer, adj=0.0f0)
     layer.a[:] = layer.z[:]
 end
 
@@ -236,9 +236,9 @@ end
 
 
 Base.@kwdef struct AdamParam <: OptParam
-    b1::Float64
-    b2::Float64
-    decay::Float64  # for AdamW, often called lambda
+    b1::ELT
+    b2::ELT
+    decay::ELT  # for AdamW, often called lambda
 end
 
 struct NoOpt <: OptParam 
@@ -262,8 +262,8 @@ end
 end
 
 @inline function adam_helper!(grad_m_lrparam, grad_v_lrparam, grad_lrparam, ad, t)
-    b1_term = 1.0 - (ad.b1)^t
-    b2_term = 1.0 - (ad.b2)^t
+    b1_term = 1.0f0 - (ad.b1)^t
+    b2_term = 1.0f0 - (ad.b2)^t
 
     # Use @turbo for better performance
     @turbo for i in eachindex(grad_m_lrparam)

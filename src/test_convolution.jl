@@ -19,7 +19,7 @@ b_tiny = [0.0]
 out_size = (3,3,1,1)
 
 # Create layer with manually set weights
-conv_layer = ConvLayer(w_tiny, b_tiny, falses(0,0,0,0), zeros(Float64, 0,0,0,0), zeros(size(w_tiny)), zeros(size(b_tiny)))
+conv_layer = ConvLayer(w_tiny, b_tiny, falses(0,0,0,0), zeros(ELT, 0,0,0,0), zeros(size(w_tiny)), zeros(size(b_tiny)))
 
 # Perform forward pass
 z_out = conv_forward_unrolled!(conv_layer, x_tiny, training=true)
@@ -38,7 +38,7 @@ println("Gradient w.r.t. Bias (db):\n", conv_layer.grad_bias)
 
 
 function numerical_gradient_wrt_w(conv_layer, x_tiny, d_out, epsilon=1e-5)
-    numerical_grad_w = zeros(size(conv_layer.weight))
+    numerical_grad_w = zeros(ELT, size(conv_layer.weight))
     for i in eachindex(conv_layer.weight)
         conv_layer.weight[i] += epsilon
         out_plus = conv_forward_unrolled!(conv_layer, x_tiny, training=false)

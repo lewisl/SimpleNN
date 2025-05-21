@@ -30,7 +30,7 @@ Base.@kwdef struct LayerSpec
     activation::Symbol = :none
     normalization::Symbol = :none  # options are :none, :batchnorm
     optimization::Symbol = :none  # options are :none :adam :adamw
-    adj::Float64 = 0              # leaky_relu factor. also for he_initialize
+    adj::ELT = 0              # leaky_relu factor. also for he_initialize
     h::Int64 = 0                  # image height (rows) or output neurons for linear layers
     w::Int64 = 0                  # image width (columns)
     outch::Int64 = 0              # output channels in image format array
@@ -43,7 +43,7 @@ end
 
 # LayerSpec methods for specific kinds of layers
 """
-    convlayerspec(;name::Symbol, activation::Symbol, adj::Float64=0.002, h::Int64=0, w::Int64=0, outch::Int64=0, f_h::Int64, f_w::Int64, inch::Int64=0, padrule::Symbol=:same)
+    convlayerspec(;name::Symbol, activation::Symbol, adj::ELT=0.002, h::Int64=0, w::Int64=0, outch::Int64=0, f_h::Int64, f_w::Int64, inch::Int64=0, padrule::Symbol=:same)
 
 Only inputs needed for a convlayer are passed to the LayerSpec.
 Note that h, w, and inch will be calculated from the previous layer,
@@ -51,13 +51,13 @@ which should be an image input, another conv layer, or a maxpooling layer.
 You must provide inputs for name, activation, outch, f_h, and f_w.
 """
 function convlayerspec(; name::Symbol, activation::Symbol=:relu, normalization::Symbol=:none, optimization::Symbol=:none, 
-        adj::Float64=0.002, h::Int64=0, w::Int64=0, outch::Int64, f_h::Int64, f_w::Int64, inch::Int64=0, padrule::Symbol=:same)
+        adj::ELT=0.002f0, h::Int64=0, w::Int64=0, outch::Int64, f_h::Int64, f_w::Int64, inch::Int64=0, padrule::Symbol=:same)
     LayerSpec(name=name, kind=:conv, activation=activation, normalization=normalization, optimization=optimization, 
                 adj=adj, h=h, w=w, outch=outch, f_h=f_h, f_w=f_w, inch=inch, padrule=padrule)
 end
 
 function linearlayerspec(; name::Symbol, activation::Symbol=:relu, normalization::Symbol=:none, optimization::Symbol=:none, 
-        adj::Float64=0.002, output::Int64)
+        adj::ELT=0.002f0, output::Int64)
     LayerSpec(name=name, kind=:linear, activation=activation, normalization=normalization, optimization=optimization, adj=adj, h=output)
 end
 
@@ -97,27 +97,27 @@ end
 
 Base.@kwdef struct ConvLayer <: Layer  
     # data arrays
-    z::Array{Float64,4}  # = Float64[;;;;]
-    z_norm::Array{Float64,4}  # = Float64[;;;;]  # if doing batchnorm: 2d to simplify batchnorm calcs
-    a::Array{Float64,4}  # = Float64[;;;;]
-    a_below::Array{Float64,4}  # = Float64[;;;;]
-    pad_a_below::Array{Float64,4}  # = Float64[;;;;]
-    eps_l::Array{Float64,4}  # = Float64[;;;;]
-    pad_next_eps::Array{Float64,4}  # = Float64[;;;;]  # TODO need to test if this is needed given successive conv layer sizes
-    grad_a::Array{Float64,4}  # = Float64[;;;;]
-    pad_x::Array{Float64,4}  # = Float64[;;;;]
+    z::Array{ELT,4}  # = ELT[;;;;]
+    z_norm::Array{ELT,4}  # = ELT[;;;;]  # if doing batchnorm: 2d to simplify batchnorm calcs
+    a::Array{ELT,4}  # = ELT[;;;;]
+    a_below::Array{ELT,4}  # = ELT[;;;;]
+    pad_a_below::Array{ELT,4}  # = ELT[;;;;]
+    eps_l::Array{ELT,4}  # = ELT[;;;;]
+    pad_next_eps::Array{ELT,4}  # = ELT[;;;;]  # TODO need to test if this is needed given successive conv layer sizes
+    grad_a::Array{ELT,4}  # = ELT[;;;;]
+    pad_x::Array{ELT,4}  # = ELT[;;;;]
 
     # weight arrays
-    weight::Array{Float64,4}  # = Float64[;;;;]  # (filter_h, filter_w, in_channels, out_channels)
-    bias::Vector{Float64}  # = Float64[]    # (out_channels)
-    grad_weight::Array{Float64,4}  # = Float64[;;;;]
-    grad_bias::Vector{Float64}  # = Float64[]
+    weight::Array{ELT,4}  # = ELT[;;;;]  # (filter_h, filter_w, in_channels, out_channels)
+    bias::Vector{ELT}  # = ELT[]    # (out_channels)
+    grad_weight::Array{ELT,4}  # = ELT[;;;;]
+    grad_bias::Vector{ELT}  # = ELT[]
 
     # cache arrays for optimization (only initialize and allocate if using)
-    grad_m_weight::Array{Float64, 4}
-    grad_m_bias::Vector{Float64}
-    grad_v_weight::Array{Float64,4}
-    grad_v_bias::Vector{Float64}
+    grad_m_weight::Array{ELT, 4}
+    grad_m_bias::Vector{ELT}
+    grad_v_weight::Array{ELT,4}
+    grad_v_bias::Vector{ELT}
 
     # layer specific functions: DO NOT USE DEFAULTS. defaults force the type and later assignment won't change it
     activationf::Function
@@ -132,7 +132,7 @@ Base.@kwdef struct ConvLayer <: Layer
     # scalar parameters
     name::Symbol  # = :noname
     optimization::Symbol  # = :none
-    adj::Float64  # = 0.0
+    adj::ELT  # = 0.0
     padrule::Symbol  # = :same   # other option is :none
     stride::Int64  # = 1     # assume stride is symmetrical for now
     dobias::Bool  # = true
@@ -150,12 +150,12 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
     if lr.normalization == :batchnorm
             normalizationf = batchnorm!
             normalization_gradf = batchnorm_grad!
-            normparams=BatchNorm{Vector{Float64}}(gam=ones(outch), bet=zeros(outch),
-                grad_gam=zeros(outch), grad_bet=zeros(outch),
-                grad_m_gam=zeros(outch), grad_v_gam=zeros(outch),
-                grad_m_bet=zeros(outch), grad_v_bet=zeros(outch),
-                mu=zeros(outch), stddev=zeros(outch),
-                mu_run=zeros(outch), std_run=zeros(outch))
+            normparams=BatchNorm{Vector{ELT}}(gam=ones(ELT, outch), bet=zeros(ELT, outch),
+                grad_gam=zeros(ELT, outch), grad_bet=zeros(ELT, outch),
+                grad_m_gam=zeros(outch), grad_v_gam=zeros(ELT, outch),
+                grad_m_bet=zeros(ELT, outch), grad_v_bet=zeros(ELT, outch),
+                mu=zeros(ELT, outch), stddev=zeros(ELT, outch),
+                mu_run=zeros(ELT, outch), std_run=zeros(ELT, outch))
             dobias = false
         elseif lr.normalization == :none
             normalizationf = noop
@@ -195,27 +195,27 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
 
     ConvLayer(
         # data arrays
-        pad_x=zeros(out_h + 2pad, out_w + 2pad, inch, n_samples),
-        a_below = zeros(prev_h, prev_w, inch, n_samples),
-        pad_a_below=zeros(prev_h + 2pad, prev_w + 2pad, inch, n_samples),
-        z=zeros(out_h, out_w, outch, n_samples),
-        z_norm=ifelse(lr.normalization == :batchnorm, zeros(out_h, out_w, outch, n_samples), zeros(0, 0, 0, 0)),
-        a=zeros(out_h, out_w, outch, n_samples),
-        eps_l=zeros(prev_h, prev_w, inch, n_samples),
-        grad_a=zeros(out_h, out_w, outch, n_samples),
-        pad_next_eps=zeros(prev_h, prev_w, outch, n_samples),
+        pad_x=zeros(ELT, out_h + 2pad, out_w + 2pad, inch, n_samples),
+        a_below = zeros(ELT, prev_h, prev_w, inch, n_samples),
+        pad_a_below=zeros(ELT, prev_h + 2pad, prev_w + 2pad, inch, n_samples),
+        z=zeros(ELT, out_h, out_w, outch, n_samples),
+        z_norm=ifelse(lr.normalization == :batchnorm, zeros(ELT, out_h, out_w, outch, n_samples), zeros(ELT, 0, 0, 0, 0)),
+        a=zeros(ELT, out_h, out_w, outch, n_samples),
+        eps_l=zeros(ELT, prev_h, prev_w, inch, n_samples),
+        grad_a=zeros(ELT, out_h, out_w, outch, n_samples),
+        pad_next_eps=zeros(ELT, prev_h, prev_w, outch, n_samples),
 
         # weight arrays
         weight=he_initialize((lr.f_h, lr.f_w, inch, lr.outch), scale=2.2, adj=lr.adj),
-        bias=zeros(outch),
-        grad_weight=zeros(lr.f_h, lr.f_w, inch, outch),
-        grad_bias=zeros(outch),
+        bias=zeros(ELT, outch),
+        grad_weight=zeros(ELT, lr.f_h, lr.f_w, inch, outch),
+        grad_bias=zeros(ELT, outch),
 
         # cache arrays for optimization (only initialize and allocate if using)
-        grad_m_weight = ifelse(isa(optparams,AdamParam),zeros(lr.f_h, lr.f_w, inch, lr.outch),zeros(0,0,0,0)),
-        grad_m_bias = ifelse(isa(optparams,AdamParam),zeros(outch),zeros(0)),
-        grad_v_weight = ifelse(isa(optparams,AdamParam),zeros(lr.f_h, lr.f_w, inch, lr.outch),zeros(0,0,0,0)),
-        grad_v_bias = ifelse(isa(optparams,AdamParam),zeros(outch),zeros(0)),
+        grad_m_weight = ifelse(isa(optparams,AdamParam),zeros(ELT, lr.f_h, lr.f_w, inch, lr.outch),zeros(ELT, 0,0,0,0)),
+        grad_m_bias = ifelse(isa(optparams,AdamParam),zeros(ELT, outch),zeros(ELT, 0)),
+        grad_v_weight = ifelse(isa(optparams,AdamParam),zeros(ELT, lr.f_h, lr.f_w, inch, lr.outch),zeros(ELT, 0,0,0,0)),
+        grad_v_bias = ifelse(isa(optparams,AdamParam),zeros(ELT, outch),zeros(ELT, 0)),
 
         # structs of layer specific parameters
         normparams = normparams,
@@ -240,24 +240,24 @@ end
 
 Base.@kwdef struct LinearLayer <: Layer
     # data arrays
-    z::Array{Float64,2}  #     = Float64[;;]       # feed forward linear combination result
-    z_norm::Array{Float64,2} #      = Float64[;;]  # if doing batchnorm
-    a::Array{Float64,2}  #     = Float64[;;]      # feed forward activation output
-    grad_a::Array{Float64,2}  #   = Float64[;;]  # backprop derivative of activation output
-    a_below::Array{Float64,2}  #   = Float64[;;]
-    eps_l::Array{Float64,2}   #   = Float64[;;]   # backprop error of the layer
+    z::Array{ELT,2}  #     = ELT[;;]       # feed forward linear combination result
+    z_norm::Array{ELT,2} #      = ELT[;;]  # if doing batchnorm
+    a::Array{ELT,2}  #     = ELT[;;]      # feed forward activation output
+    grad_a::Array{ELT,2}  #   = ELT[;;]  # backprop derivative of activation output
+    a_below::Array{ELT,2}  #   = ELT[;;]
+    eps_l::Array{ELT,2}   #   = ELT[;;]   # backprop error of the layer
 
     # weight arrays
-    weight::Array{Float64,2}     # = Float64[;;] # (output_dim, input_dim)
-    bias::Vector{Float64}        # = Float64[]     # (output_dim)
-    grad_weight::Array{Float64,2}   #     = Float64[;;]
-    grad_bias::Vector{Float64}  #   = Float64[]
+    weight::Array{ELT,2}     # = ELT[;;] # (output_dim, input_dim)
+    bias::Vector{ELT}        # = ELT[]     # (output_dim)
+    grad_weight::Array{ELT,2}   #     = ELT[;;]
+    grad_bias::Vector{ELT}  #   = ELT[]
 
     # cache arrays for optimization (only initialize and allocate if using)
-    grad_m_weight::Array{Float64, 2}
-    grad_m_bias::Vector{Float64}
-    grad_v_weight::Array{Float64,2}
-    grad_v_bias::Vector{Float64}
+    grad_m_weight::Array{ELT, 2}
+    grad_m_bias::Vector{ELT}
+    grad_v_weight::Array{ELT,2}
+    grad_v_bias::Vector{ELT}
 
     # structs of layer specific parameters
     normparams::NormParam  #       = NoNorm()
@@ -272,7 +272,7 @@ Base.@kwdef struct LinearLayer <: Layer
     # scalar parameters
     name::Symbol       #  = :noname
     optimization::Symbol     # = :none
-    adj::Float64   #      = 0.0
+    adj::ELT   #      = 0.0
     dobias::Bool    #             = true
 end
 
@@ -283,12 +283,12 @@ function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
     if lr.normalization == :batchnorm
             normalizationf = batchnorm!
             normalization_gradf = batchnorm_grad!
-            normparams=BatchNorm{Vector{Float64}}(gam=ones(outputs), bet=zeros(outputs),
-                grad_gam=zeros(outputs), grad_bet=zeros(outputs),
-                grad_m_gam=zeros(outputs), grad_v_gam=zeros(outputs),
-                grad_m_bet=zeros(outputs), grad_v_bet=zeros(outputs),
-                mu=zeros(outputs), stddev=zeros(outputs),
-                mu_run=zeros(outputs), std_run=zeros(outputs))
+            normparams=BatchNorm{Vector{ELT}}(gam=ones(ELT, outputs), bet=zeros(ELT, outputs),
+                grad_gam=zeros(ELT, outputs), grad_bet=zeros(ELT, outputs),
+                grad_m_gam=zeros(ELT, outputs), grad_v_gam=zeros(ELT, outputs),
+                grad_m_bet=zeros(ELT, outputs), grad_v_bet=zeros(ELT, outputs),
+                mu=zeros(ELT, outputs), stddev=zeros(ELT, outputs),
+                mu_run=zeros(ELT, outputs), std_run=zeros(ELT, outputs))
             dobias = false
         elseif lr.normalization == :none
             normalizationf = noop
@@ -338,24 +338,24 @@ function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
 
     LinearLayer(
         # data arrays
-        z=zeros(outputs, n_samples),
-        z_norm=ifelse(lr.normalization == :batchnorm, zeros(outputs, n_samples), zeros(0, 0)),
-        a=zeros(outputs, n_samples),
-        a_below = zeros(inputs, n_samples),
-        eps_l=zeros(outputs, n_samples),
-        grad_a=zeros(outputs, n_samples),
+        z=zeros(ELT, outputs, n_samples),
+        z_norm=ifelse(lr.normalization == :batchnorm, zeros(ELT, outputs, n_samples), zeros(ELT, 0, 0)),
+        a=zeros(ELT, outputs, n_samples),
+        a_below = zeros(ELT, inputs, n_samples),
+        eps_l=zeros(ELT, outputs, n_samples),
+        grad_a=zeros(ELT, outputs, n_samples),
 
         # weight arrays
         weight=he_initialize((outputs, inputs), scale=1.5, adj=lr.adj),
-        bias=zeros(outputs),
+        bias=zeros(ELT, outputs),
         grad_weight=zeros(outputs, inputs),
-        grad_bias=zeros(outputs),
+        grad_bias=zeros(ELT, outputs),
 
         # cache arrays for optimization (only initialize and allocate if using)
-        grad_m_weight = ifelse(isa(optparams,AdamParam),zeros(outputs, inputs),zeros(0,0)),
-        grad_m_bias = ifelse(isa(optparams,AdamParam),zeros(outputs),zeros(0)),
-        grad_v_weight = ifelse(isa(optparams,AdamParam),zeros(outputs, inputs),zeros(0,0)),
-        grad_v_bias = ifelse(isa(optparams,AdamParam),zeros(outputs),zeros(0)),
+        grad_m_weight = ifelse(isa(optparams,AdamParam),zeros(outputs, inputs),zeros(ELT, 0,0)),
+        grad_m_bias = ifelse(isa(optparams,AdamParam),zeros(ELT, outputs),zeros(ELT, 0)),
+        grad_v_weight = ifelse(isa(optparams,AdamParam),zeros(ELT, outputs, inputs),zeros(ELT, 0,0)),
+        grad_v_bias = ifelse(isa(optparams,AdamParam),zeros(ELT, outputs),zeros(ELT, 0)),
 
         # structs of layer specific parameters
         normparams = normparams,
@@ -379,9 +379,9 @@ end
 Base.@kwdef struct FlattenLayer <: Layer
     name::Symbol = :noname
     output_dim::Int64 = 0
-    dl_dflat::Array{Float64,2} = Float64[;;]
-    a::Array{Float64,2} = Float64[;;]
-    eps_l::Array{Float64,4} = Float64[;;;;]
+    dl_dflat::Array{ELT,2} = ELT[;;]
+    a::Array{ELT,2} = ELT[;;]
+    eps_l::Array{ELT,4} = ELT[;;;;]
 end
 
 # constructor method to prepare inputs and create layer
@@ -392,9 +392,9 @@ function FlattenLayer(lr::LayerSpec, prevlayer, n_samples)
     FlattenLayer(
         name=lr.name,
         output_dim=output_dim,
-        a=zeros(output_dim, n_samples),
-        dl_dflat=zeros(output_dim, n_samples),
-        eps_l=zeros(h, w, ch, n_samples)
+        a=zeros(ELT, output_dim, n_samples),
+        dl_dflat=zeros(ELT, output_dim, n_samples),
+        eps_l=zeros(ELT, h, w, ch, n_samples)
     )
 end
 
@@ -404,16 +404,16 @@ Base.@kwdef struct InputLayer <: Layer     # we only have this to simplify feedf
     out_h::Int64 = 0
     out_w::Int64 = 0
     outch::Int64 = 0
-    a::Array{Float64}   # no default provided because dims different for :image vs :linear
+    a::Array{ELT}   # no default provided because dims different for :image vs :linear
 end
 
 
 Base.@kwdef struct MaxPoolLayer <: Layer
     name::Symbol = :noname
     pool_size::Tuple{Int,Int}
-    a::Array{Float64,4} = Float64[;;;;]
+    a::Array{ELT,4} = ELT[;;;;]
     mask::Array{Bool,4} = Bool[;;;;]
-    eps_l::Array{Float64,4} = Float64[;;;;]
+    eps_l::Array{ELT,4} = ELT[;;;;]
 end
 
 # constructor method to prepare inputs and create layer
@@ -427,8 +427,8 @@ function MaxPoolLayer(lr::LayerSpec, prevlayer, n_samples)
     MaxPoolLayer(
         name=lr.name,
         pool_size=(lr.f_h, lr.f_w),
-        a=zeros(out_h, out_w, outch, batch_size),
+        a=zeros(ELT, out_h, out_w, outch, batch_size),
         mask=falses(in_h, in_w, outch, batch_size),
-        eps_l=zeros(in_h, in_w, outch, batch_size),
+        eps_l=zeros(ELT, in_h, in_w, outch, batch_size),
     )
 end

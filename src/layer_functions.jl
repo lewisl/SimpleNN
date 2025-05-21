@@ -15,10 +15,10 @@ using LoopVectorization
 
 # ConvLayer
 
-function layer_forward!(layer::ConvLayer, x::AbstractArray{Float64,4}, batch_size)
+function layer_forward!(layer::ConvLayer, x::AbstractArray{ELT,4}, batch_size)
     layer.a_below .= x   # as an alias, this might not work for backprop though it seems to
 
-    # fill!(layer.z, 0.0)
+    # fill!(layer.z, 0.0f0)
 
     if layer.padrule == :same  # we know padding = 1 for :same
         @views layer.pad_x[begin+1:end-1, begin+1:end-1, :, :] .= x
@@ -26,13 +26,13 @@ function layer_forward!(layer::ConvLayer, x::AbstractArray{Float64,4}, batch_siz
         layer.pad_x .= x
     end
 
-    # initialize output z with 0.0 if nobias or with bias: when dobias==false, layer.bias remains as initialized to zeros
+    # initialize output z with 0.0f0 if nobias or with bias: when dobias==false, layer.bias remains as initialized to zeros
     if layer.dobias
         for oc in axes(layer.z, 3)
             @turbo @views layer.z[:,:,oc,:] .= layer.bias[oc]
         end
     else
-        fill!(layer.z, 0.0)
+        fill!(layer.z, 0.0f0)
     end
 
 
@@ -41,8 +41,8 @@ function layer_forward!(layer::ConvLayer, x::AbstractArray{Float64,4}, batch_siz
         for oc in axes(layer.z, 3)  # output channels
             for j in axes(layer.z, 2)  # width
                 for i in axes(layer.z, 1)  # height
-                    # Initialize with bias or 0.0 and perform convolution in one pass: always zero if layer.dobias == false
-                    # layer.z[i, j, oc, b] = layer.bias[oc]                                          # ifelse(layer.dobias, layer.bias[oc], 0.0)
+                    # Initialize with bias or 0.0f0 and perform convolution in one pass: always zero if layer.dobias == false
+                    # layer.z[i, j, oc, b] = layer.bias[oc]                                          # ifelse(layer.dobias, layer.bias[oc], 0.0f0)
                     for ic in axes(layer.weight, 3)  # input channels
                         for fh in axes(layer.weight, 1)  # filter height
                             for fw in axes(layer.weight, 2)  # filter width
@@ -70,10 +70,10 @@ function layer_backward!(layer::ConvLayer, layer_above, n_samples)
     H_out, W_out, _, _ = size(layer.eps_l)
 
 
-    fill!(layer.grad_weight, 0.0)  # reinitialization to allow accumulation of convolutions
-    fill!(layer.eps_l, 0.0)
-    fill!(layer.grad_a, 0.0)
-    inverse_n_samples =  1.0 / Float64(n_samples)
+    fill!(layer.grad_weight, 0.0f0)  # reinitialization to allow accumulation of convolutions
+    fill!(layer.eps_l, 0.0f0)
+    fill!(layer.grad_a, 0.0f0)
+    inverse_n_samples =  1.0f0 / ELT(n_samples)
 
     layer.activation_gradf(layer)
 
@@ -81,7 +81,7 @@ function layer_backward!(layer::ConvLayer, layer_above, n_samples)
 
     if layer.padrule == :none   # TODO even if pad were none we are never using this!
         # TODO does this work? and test if previous layer is img formatted (one of input, conv, maxpooling)
-        fill!(layer.pad_next_eps, 0.0)
+        fill!(layer.pad_next_eps, 0.0f0)
         @views layer.pad_next_eps[2:end-1, 2:end-1, :, :] .= layer_above.eps_l
     elseif layer.padrule == :same
         layer.pad_next_eps .= layer_above.eps_l
@@ -117,12 +117,12 @@ end
 
 function compute_grad_weight!(layer, n_samples)
     H_out, W_out, _, _ = size(layer.eps_l)
-    sample_count_inverse = 1.0 / Float64(n_samples)
+    sample_count_inverse = 1.0f0 / ELT(n_samples)
 
     # Initialize grad_weight to zero
-    fill!(layer.grad_weight, 0.0) # no allocations; faster than assignment
+    fill!(layer.grad_weight, 0.0f0) # no allocations; faster than assignment
     if layer.padrule == :same
-        fill!(layer.pad_a_below, 0.0)
+        fill!(layer.pad_a_below, 0.0f0)
         @views layer.pad_a_below[2:end-1, 2:end-1, :, :] .= layer.a_below
     else
         layer.pad_a_below = layer.a_below  # set alias to a_below to use in loop below.  no allocation
@@ -156,11 +156,11 @@ end
 # MaxPoolLayer
 
 # note: this implicitly assumes stride is the size of the patch
-function layer_forward!(layer::MaxPoolLayer, x::Array{Float64,4}, n_samples)
+function layer_forward!(layer::MaxPoolLayer, x::Array{ELT,4}, n_samples)
     (pool_h, pool_w) = layer.pool_size
     (H_out, W_out, C, B) = size(layer.a)
     # re-initialize
-    fill!(layer.a, 0.0)
+    fill!(layer.a, 0.0f0)
     fill!(layer.mask, false)
 
     # no stride: the pool window moves across the image edge to edge with no overlapping
@@ -169,7 +169,7 @@ function layer_forward!(layer::MaxPoolLayer, x::Array{Float64,4}, n_samples)
             for j = 1:W_out
                 for i = 1:H_out
                     # Find max value directly without creating a view
-                    max_val = typemin(Float64)
+                    max_val = typemin(ELT)
                     max_a = 1
                     max_b = 1
                     for b = 1:pool_w
@@ -194,7 +194,7 @@ end
 
 
 function layer_backward!(layer::MaxPoolLayer, layer_above, n_samples)
-    fill!(layer.eps_l, 0.0)
+    fill!(layer.eps_l, 0.0f0)
     (pool_h, pool_w) = layer.pool_size
     @inbounds for bn in axes(layer_above.eps_l, 4)  # @inbounds
         for c in axes(layer.eps_l, 3)
@@ -217,7 +217,7 @@ end
 
 # FlattenLayer
 
-function layer_forward!(layer::FlattenLayer, x::Array{Float64,4}, batch_size)
+function layer_forward!(layer::FlattenLayer, x::Array{ELT,4}, batch_size)
     h, w, ch, _ = size(x)
     for b in axes(x, 4)  # iterate over batch dimension  
         @turbo for c in axes(x, 3)  # iterate over channels
@@ -260,7 +260,7 @@ end
 
 # LinearLayer
 
-function layer_forward!(layer::LinearLayer, x::Matrix{Float64}, batch_size)
+function layer_forward!(layer::LinearLayer, x::Matrix{ELT}, batch_size)
     mul!(layer.z, layer.weight, x)  # in-place matrix multiplication
 
     # bias: explicit loop faster than broadcasting
@@ -281,11 +281,11 @@ function layer_forward!(layer::LinearLayer, x::Matrix{Float64}, batch_size)
 end
 
 function layer_backward!(layer::LinearLayer, layer_above::LinearLayer, n_samples; output=false)
-    inverse_n_samples = 1.0 / Float64(n_samples)
+    inverse_n_samples = 1.0f0 / ELT(n_samples)
     if output
         # layer.eps_l calculated by prior call to dloss_dz
         mul!(layer.grad_weight, layer.eps_l, layer.a_below')  # in-place matrix multiplication
-        layer.grad_weight .*= (1.0 / n_samples)  # in-place scaling
+        layer.grad_weight .*= (1.0f0 / n_samples)  # in-place scaling
     else  # this is hidden layer
         layer.activation_gradf(layer)  # calculates layer.grad_a
         mul!(layer.eps_l, layer_above.weight', layer_above.eps_l)  # in-place matrix multiplication
@@ -294,12 +294,12 @@ function layer_backward!(layer::LinearLayer, layer_above::LinearLayer, n_samples
         layer.normalization_gradf(layer) # either noop or batchnorm_grad!
 
         mul!(layer.grad_weight, layer.eps_l, layer.a_below')  # in-place matrix multiplication
-        layer.grad_weight .*= (1.0 / n_samples)  # in-place scaling
+        layer.grad_weight .*= (1.0f0 / n_samples)  # in-place scaling
     end
 
     # Compute bias gradient efficiently without allocations
     if layer.dobias
-        fill!(layer.grad_bias, 0.0)
+        fill!(layer.grad_bias, 0.0f0)
         @turbo for j in axes(layer.eps_l, 2)
             for i in axes(layer.eps_l, 1)
                 layer.grad_bias[i] += layer.eps_l[i, j]

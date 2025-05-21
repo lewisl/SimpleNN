@@ -69,7 +69,7 @@ function flattenview!(arrout, arrin)
     end
 end
 
-function softmax!(a::Array{Float64,2}, z::Array{Float64,2})
+function softmax!(a::Array{ELT,2}, z::Array{ELT,2})
     for c in axes(z, 2) # columns = samples
         va = view(a, :, c)
         vz = view(z, :, c)
