@@ -109,8 +109,9 @@ function layer_backward!(layer::ConvLayer, layer_above, n_samples)
     # compute gradients
     compute_grad_weight!(layer, n_samples)
 
-    # layer.dobias && layer.grad_bias .= dropdims(sum(layer_above.eps_l, dims=(1,2,4)), dims=(1,2,4))  <-- doesn't work reliably
-    layer.dobias && reshape(sum(layer_above.eps_l, dims=(1, 2, 4)), oc)  .* inverse_n_samples
+    if layer.dobias 
+        layer.grad_bias .= reshape(sum(layer_above.eps_l, dims=(1, 2, 4)), oc)  .* inverse_n_samples
+    end
 
     return     # nothing
 end

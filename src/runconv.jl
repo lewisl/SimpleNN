@@ -14,10 +14,10 @@ using SimpleNN
 # 64 channels is not great
 one_conv = LayerSpec[
     inputlayerspec(h=28, w=28, outch=1, name=:input)
-    convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, normalization=:batchnorm, optimization=:adam)  # , normalization=:batchnorm  , optimization=:adamw
+    convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, optimization=:adamw, normalization=:batchnorm)  # , normalization=:batchnorm  , optimization=:adamw
     maxpoollayerspec(name=:maxpool1, f_h=2, f_w=2)
     flattenlayerspec(name=:flatten)
-    linearlayerspec(output=200, activation=:relu, name=:linear1, normalization=:batchnorm, optimization=:adam)
+    linearlayerspec(output=200, activation=:relu, name=:linear1, optimization=:adamw, normalization=:batchnorm)
     LayerSpec(h=10, kind=:linear, name=:output, activation=:softmax)
 ];
 
@@ -54,10 +54,10 @@ three_linear = LayerSpec[
 preptest = true
 full_batch = 60_000
 minibatch_size = 50
-epochs = 15  # 15 epochs yields near perfect training convergence with dense linear layers
-layerspecs = two_linear
+epochs = 5  # 15 epochs yields near perfect training convergence with dense linear layers
+layerspecs = one_conv
 
-hp = HyperParameters(lr=0.005f0, reg=:L2, regparm=0.00043f0, do_stats=false)  # reg=:L2, regparm=0.00043,
+hp = HyperParameters(lr=0.001f0, reg=:none, regparm=0.00043f0, do_stats=false)  # reg=:L2, regparm=0.00043,
 
 # %%
 
