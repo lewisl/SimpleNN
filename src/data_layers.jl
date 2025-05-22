@@ -27,7 +27,7 @@ the weights and arrays required during model training.
 Base.@kwdef struct LayerSpec
     name::Symbol = :noname
     kind::Symbol = :none
-    activation::Symbol = :none
+    activation::Symbol = :none  # options are :relu, :leaky_relu, :logistic;  for output layer only :softmax, :regression
     normalization::Symbol = :none  # options are :none, :batchnorm
     optimization::Symbol = :none  # options are :none :adam :adamw
     adj::ELT = 0              # leaky_relu factor. also for he_initialize
@@ -51,13 +51,13 @@ which should be an image input, another conv layer, or a maxpooling layer.
 You must provide inputs for name, activation, outch, f_h, and f_w.
 """
 function convlayerspec(; name::Symbol, activation::Symbol=:relu, normalization::Symbol=:none, optimization::Symbol=:none, 
-        adj::ELT=0.002f0, h::Int64=0, w::Int64=0, outch::Int64, f_h::Int64, f_w::Int64, inch::Int64=0, padrule::Symbol=:same)
+        adj::ELT=ELT(0.002), h::Int64=0, w::Int64=0, outch::Int64, f_h::Int64, f_w::Int64, inch::Int64=0, padrule::Symbol=:same)
     LayerSpec(name=name, kind=:conv, activation=activation, normalization=normalization, optimization=optimization, 
                 adj=adj, h=h, w=w, outch=outch, f_h=f_h, f_w=f_w, inch=inch, padrule=padrule)
 end
 
 function linearlayerspec(; name::Symbol, activation::Symbol=:relu, normalization::Symbol=:none, optimization::Symbol=:none, 
-        adj::ELT=0.002f0, output::Int64)
+        adj::ELT=ELT(0.002), output::Int64)
     LayerSpec(name=name, kind=:linear, activation=activation, normalization=normalization, optimization=optimization, adj=adj, h=output)
 end
 

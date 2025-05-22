@@ -18,7 +18,7 @@ using LoopVectorization
 function layer_forward!(layer::ConvLayer, x::AbstractArray{ELT,4}, batch_size)
     layer.a_below .= x   # as an alias, this might not work for backprop though it seems to
 
-    # fill!(layer.z, 0.0f0)
+    # fill!(layer.z, ELT(0.0))
 
     if layer.padrule == :same  # we know padding = 1 for :same
         @views layer.pad_x[begin+1:end-1, begin+1:end-1, :, :] .= x
@@ -32,7 +32,7 @@ function layer_forward!(layer::ConvLayer, x::AbstractArray{ELT,4}, batch_size)
             @turbo @views layer.z[:,:,oc,:] .= layer.bias[oc]
         end
     else
-        fill!(layer.z, 0.0f0)
+        fill!(layer.z, ELT(0.0))
     end
 
 
@@ -70,10 +70,10 @@ function layer_backward!(layer::ConvLayer, layer_above, n_samples)
     H_out, W_out, _, _ = size(layer.eps_l)
 
 
-    fill!(layer.grad_weight, 0.0f0)  # reinitialization to allow accumulation of convolutions
-    fill!(layer.eps_l, 0.0f0)
-    fill!(layer.grad_a, 0.0f0)
-    inverse_n_samples =  1.0f0 / ELT(n_samples)
+    fill!(layer.grad_weight, ELT(0.0))  # reinitialization to allow accumulation of convolutions
+    fill!(layer.eps_l, ELT(0.0))
+    fill!(layer.grad_a, ELT(0.0))
+    inverse_n_samples =  ELT(1.0) / ELT(n_samples)
 
     layer.activation_gradf(layer)
 
@@ -81,7 +81,7 @@ function layer_backward!(layer::ConvLayer, layer_above, n_samples)
 
     if layer.padrule == :none   # TODO even if pad were none we are never using this!
         # TODO does this work? and test if previous layer is img formatted (one of input, conv, maxpooling)
-        fill!(layer.pad_next_eps, 0.0f0)
+        fill!(layer.pad_next_eps, ELT(0.0))
         @views layer.pad_next_eps[2:end-1, 2:end-1, :, :] .= layer_above.eps_l
     elseif layer.padrule == :same
         layer.pad_next_eps .= layer_above.eps_l
@@ -118,12 +118,12 @@ end
 
 function compute_grad_weight!(layer, n_samples)
     H_out, W_out, _, _ = size(layer.eps_l)
-    sample_count_inverse = 1.0f0 / ELT(n_samples)
+    sample_count_inverse = ELT(1.0) / ELT(n_samples)
 
     # Initialize grad_weight to zero
-    fill!(layer.grad_weight, 0.0f0) # no allocations; faster than assignment
+    fill!(layer.grad_weight, ELT(0.0)) # no allocations; faster than assignment
     if layer.padrule == :same
-        fill!(layer.pad_a_below, 0.0f0)
+        fill!(layer.pad_a_below, ELT(0.0))
         @views layer.pad_a_below[2:end-1, 2:end-1, :, :] .= layer.a_below
     else
         layer.pad_a_below = layer.a_below  # set alias to a_below to use in loop below.  no allocation
@@ -161,7 +161,7 @@ function layer_forward!(layer::MaxPoolLayer, x::Array{ELT,4}, n_samples)
     (pool_h, pool_w) = layer.pool_size
     (H_out, W_out, C, B) = size(layer.a)
     # re-initialize
-    fill!(layer.a, 0.0f0)
+    fill!(layer.a, ELT(0.0))
     fill!(layer.mask, false)
 
     # no stride: the pool window moves across the image edge to edge with no overlapping
@@ -195,7 +195,7 @@ end
 
 
 function layer_backward!(layer::MaxPoolLayer, layer_above, n_samples)
-    fill!(layer.eps_l, 0.0f0)
+    fill!(layer.eps_l, ELT(0.0))
     (pool_h, pool_w) = layer.pool_size
     @inbounds for bn in axes(layer_above.eps_l, 4)  # @inbounds
         for c in axes(layer.eps_l, 3)
@@ -282,11 +282,11 @@ function layer_forward!(layer::LinearLayer, x::Matrix{ELT}, batch_size)
 end
 
 function layer_backward!(layer::LinearLayer, layer_above::LinearLayer, n_samples; output=false)
-    inverse_n_samples = 1.0f0 / ELT(n_samples)
+    inverse_n_samples = ELT(1.0) / ELT(n_samples)
     if output
         # layer.eps_l calculated by prior call to dloss_dz
         mul!(layer.grad_weight, layer.eps_l, layer.a_below')  # in-place matrix multiplication
-        layer.grad_weight .*= (1.0f0 / n_samples)  # in-place scaling
+        layer.grad_weight .*= (ELT(1.0) / n_samples)  # in-place scaling
     else  # this is hidden layer
         layer.activation_gradf(layer)  # calculates layer.grad_a
         mul!(layer.eps_l, layer_above.weight', layer_above.eps_l)  # in-place matrix multiplication
@@ -295,12 +295,12 @@ function layer_backward!(layer::LinearLayer, layer_above::LinearLayer, n_samples
         layer.normalization_gradf(layer) # either noop or batchnorm_grad!
 
         mul!(layer.grad_weight, layer.eps_l, layer.a_below')  # in-place matrix multiplication
-        layer.grad_weight .*= (1.0f0 / n_samples)  # in-place scaling
+        layer.grad_weight .*= (ELT(1.0) / n_samples)  # in-place scaling
     end
 
     # Compute bias gradient efficiently without allocations
     if layer.dobias
-        fill!(layer.grad_bias, 0.0f0)
+        fill!(layer.grad_bias, ELT(0.0))
         @turbo for j in axes(layer.eps_l, 2)
             for i in axes(layer.eps_l, 1)
                 layer.grad_bias[i] += layer.eps_l[i, j]

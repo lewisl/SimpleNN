@@ -7,8 +7,8 @@ module SimpleNN
 
 # ----------------------------------------------------------------------------------------
 
-const ELT = Float32   # ELT for element type
-const IT = 1f-12
+const ELT = Float32   # ELT for element type, Float32 or Float64
+const IT = 1f-12   # IT for itty bitty
 
 using Random
 using LinearAlgebra

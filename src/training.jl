@@ -19,9 +19,9 @@ using LoopVectorization
 
 
 Base.@kwdef mutable struct HyperParameters
-    lr::ELT = 0.02f0         # learning rate
+    lr::ELT = ELT(0.02)        # learning rate
     reg::Symbol = :none      # one of :none, :L1, :L2
-    regparm::ELT = 0.0004f0  # typically called lambda
+    regparm::ELT = ELT(0.0004)  # typically called lambda
     do_stats::Bool = true
 
     function HyperParameters(lr::ELT, reg::Symbol, regparm::ELT, do_stats::Bool)
@@ -84,17 +84,17 @@ function show_layer_specs(layers)
     return
 end
 
-function he_initialize(weight_dims::NTuple{4,Int64}; scale=2.0f0, adj=0.0f0)
+function he_initialize(weight_dims::NTuple{4,Int64}; scale=ELT(2.0), adj=ELT(0.0))
     k_h, k_w, in_channels, out_channels = weight_dims
     fan_in = k_h * k_w * in_channels
-    scale_factor = scale / (1.0f0 + adj^2) / ELT(fan_in)
+    scale_factor = scale / (ELT(1.0) + adj^2) / ELT(fan_in)
     randn(k_h, k_w, in_channels, out_channels) .* sqrt(scale_factor)
 end
 
-function he_initialize(weight_dims::NTuple{2,Int64}; scale=2.0f0, adj=0.0f0)
+function he_initialize(weight_dims::NTuple{2,Int64}; scale=ELT(2.0), adj=ELT(0.0))
     # adj is typically for leaky relu
     n_in, n_out = weight_dims
-    scale_factor = scale / (1.0f0 + adj^2) / ELT(n_in)
+    scale_factor = scale / (ELT(1.0) + adj^2) / ELT(n_in)
     randn(n_in, n_out) .* sqrt(scale_factor)
 end
 
@@ -237,8 +237,8 @@ end
 function cross_entropy_cost(pred::AbstractMatrix{ELT}, target::AbstractMatrix{ELT}, n_samples)
     # this may not be obvious, but it is a non-allocating version
     n = n_samples
-    log_sum1 = 0.0f0
-    log_sum2 = 0.0f0
+    log_sum1 = ELT(0.0)
+    log_sum2 = ELT(0.0)
 
     @inbounds for i in eachindex(pred)
         # First term: target * log(max(pred, 1e-20))
@@ -246,18 +246,18 @@ function cross_entropy_cost(pred::AbstractMatrix{ELT}, target::AbstractMatrix{EL
         log_sum1 += target[i] * log(pred_val)
 
         # Second term: (1-target) * log(max(1-pred, 1e-20))
-        inv_pred = max(1.0f0 - pred[i], 1f-20)
-        log_sum2 += (1.0f0 - target[i]) * log(inv_pred)
+        inv_pred = max(ELT(1.0) - pred[i], 1f-20)
+        log_sum2 += (ELT(1.0) - target[i]) * log(inv_pred)
     end
 
-    return (-1.0f0 / n) * (log_sum1 + log_sum2)
+    return (ELT(-1.0) / n) * (log_sum1 + log_sum2)
 end
 
 
-function mse_cost(targets, predictions, n, theta=[], lambda=1.0f0, reg="", output_layer=3)
-    @fastmath cost = (1.0f0 / (2.0f0 * n)) .* sum((targets .- predictions) .^ 2.0f0)
+function mse_cost(targets, predictions, n, theta=[], lambda=ELT(1.0), reg="", output_layer=3)
+    @fastmath cost = (ELT(1.0) / (ELT(2.0) * n)) .* sum((targets .- predictions) .^ ELT(2.0))
     @fastmath if reg == "L2"  # set reg="" if not using regularization
-        regterm = lambda/(2.0f0 * n) .* sum([dot(th, th) for th in theta[2:output_layer]])
+        regterm = lambda/(ELT(2.0) * n) .* sum([dot(th, th) for th in theta[2:output_layer]])
         cost = cost + regterm
     end
     return cost
@@ -299,8 +299,8 @@ function update_batchnorm!(layer, hp, t)
     ad = layer.optparams
     if isa(bn, BatchNorm) && isa(ad, AdamParam)
         pre_adam_batchnorm!(bn, ad, t)
-        b1_divisor = 1.0f0 / (1.0f0 - ad.b1^t)
-        b2_divisor = 1.0f0 / (1.0f0 - ad.b2^t)
+        b1_divisor = ELT(1.0) / (ELT(1.0) - ad.b1^t)
+        b2_divisor = ELT(1.0) / (ELT(1.0) - ad.b2^t)
 
         # Update gamma (scale) parameter - no weight decay for batch norm
         @turbo for i in eachindex(bn.gam)
@@ -328,8 +328,8 @@ function update_weights!(layer::Layer, hp, t)
     if isa(layer.optparams, AdamParam)
         ad = layer.optparams
         pre_adam!(layer, ad, t)
-        b1_divisor = 1.0f0 / (1.0f0 - ad.b1^t)
-        b2_divisor = 1.0f0 / (1.0f0 - ad.b2^t)
+        b1_divisor = ELT(1.0) / (ELT(1.0) - ad.b1^t)
+        b2_divisor = ELT(1.0) / (ELT(1.0) - ad.b2^t)
 
         # Update weights with @turbo for better performance
         @turbo for i in eachindex(layer.weight)
@@ -568,7 +568,7 @@ function random_onehot(i, j)
     arr = zeros(ELT, i, j)
     for n in axes(arr, 2)
         rowselector = rand(1:10)
-        arr[rowselector, n] = 1.0f0
+        arr[rowselector, n] = ELT(1.0)
     end
     return arr
 end

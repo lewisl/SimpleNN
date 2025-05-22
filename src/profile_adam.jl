@@ -23,7 +23,7 @@ function create_test_network()
     x = rand(ELT, 28, 28, 1, batch_size)
     y = zeros(ELT, 10, batch_size)
     for i in 1:batch_size
-        y[rand(1:10), i] = 1.0
+        y[rand(1:10), i] = ELT(1.0)
     end
     
     return layerspecs, x, y, batch_size
@@ -40,7 +40,7 @@ end
 function profile_adam()
     layerspecs, x, y, batch_size = create_test_network()
     layers = setup_train(layerspecs, batch_size)
-    hp = HyperParameters(lr=0.001f0, reg=:none, regparm=0.0f0, do_stats=false)
+    hp = HyperParameters(lr=ELT(0.001), reg=:none, regparm=ELT(0.0), do_stats=false)
     
     # Warm up
     for _ in 1:5
