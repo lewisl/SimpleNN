@@ -197,7 +197,7 @@ function dloss_dz!(layer, target)
 end
 
 # tested to have no allocations
-function softmax!(layer, adj=ELT(0.0))
+function softmax!(layer)
     for c in axes(layer.z, 2)
         # Find maximum in this column
         max_val = typemin(ELT)
@@ -221,11 +221,11 @@ function softmax!(layer, adj=ELT(0.0))
     return
 end
 
-function logistic!(layer, adj=ELT(0.0))
+function logistic!(layer)
     @fastmath layer.a .= ELT(1.0) ./ (ELT(1.0) .+ exp.(.-layer.z))
 end
 
-function regression!(layer, adj=ELT(0.0))
+function regression!(layer)
     layer.a[:] = layer.z[:]
 end
 

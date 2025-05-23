@@ -42,7 +42,8 @@ export
     linearlayerspec,    # constructor with only inputs needed for a linear layer
     flattenlayerspec,   # constructor with only inputs needed for a flatten layer
     maxpoollayerspec,    # constructor with only inputs needed for a maxpooling layer
-    inputlayerspec      # constructor for the spec of the input layer
+    inputlayerspec,      # constructor for the spec of the input layer
+    outputlayerspec     # constructor for an output layer
 
 # functions you can use
 export

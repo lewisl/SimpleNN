@@ -1,7 +1,6 @@
 #=
 TODO
 - test ConvLayer with no padding
-- best way to set output layer type: softmax, single, multi, regression?
 
 - test regression
 - make stats struct immutable

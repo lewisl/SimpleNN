@@ -18,7 +18,7 @@ one_conv = LayerSpec[
     maxpoollayerspec(name=:maxpool1, f_h=2, f_w=2)
     flattenlayerspec(name=:flatten)
     linearlayerspec(output=200, activation=:relu, name=:linear1, optimization=:adamw, normalization=:batchnorm)
-    LayerSpec(h=10, kind=:linear, name=:output, activation=:softmax)
+    outputlayerspec(output=10, activation=:softmax, name=:output)
 ];
 
 
@@ -30,7 +30,7 @@ two_conv = LayerSpec[
     maxpoollayerspec(name=:maxpool2, f_h=2, f_w=2)
     flattenlayerspec(name=:flatten)
     linearlayerspec(name=:linear1, output=200,normalization=:batchnorm, optimization=:adam)
-    LayerSpec(name=:output, h=10, kind=:linear, activation=:softmax)
+    outputlayerspec(output=10, activation=:softmax, name=:output)
 ];
 
 two_linear = LayerSpec[
@@ -38,7 +38,7 @@ two_linear = LayerSpec[
     flattenlayerspec(name=:flatten)
     linearlayerspec(name=:linear1, output=256, normalization=:batchnorm,  optimization=:adam)   # normalization=:batchnorm
     linearlayerspec(name=:linear2, output=256, normalization=:batchnorm,  optimization=:adam)
-    LayerSpec(h=10, kind=:linear, name=:output, activation=:softmax)
+    outputlayerspec(output=10, activation=:softmax, name=:output)
 ];
 
 three_linear = LayerSpec[
@@ -47,7 +47,7 @@ three_linear = LayerSpec[
     linearlayerspec(name=:linear1, output=300, normalization=:batchnorm)
     linearlayerspec(name=:linear2, output=300, normalization=:batchnorm)
     linearlayerspec(name=:linear3, output=300, normalization=:batchnorm)
-    LayerSpec(h=10, kind=:linear, name=:output, activation=:softmax)
+    outputlayerspec(output=10, activation=:softmax, name=:output)
 ];
 
 # %%   some hyperparameters
@@ -111,10 +111,10 @@ y_single = reshape(y_single, :, 1);
 
 display_mnist_digit(x_single)
 
-Convolution.feedforward!(pred1layers, x_single, 1);
+SimpleNN.feedforward!(pred1layers, x_single, 1);
 pred1 = pred1layers[end].a;
 
-target_digit = Convolution.find_max_idx(y_single[:, 1]) - 1;
-pred_digit = Convolution.find_max_idx(pred1[:, 1]) - 1;
+target_digit = SimpleNN.find_max_idx(y_single[:, 1]) - 1;
+pred_digit = SimpleNN.find_max_idx(pred1[:, 1]) - 1;
 
 println("\nTarget digit: ", target_digit, "  Predicted digit: ", pred_digit)

@@ -1,5 +1,3 @@
-
-
 using LoopVectorization
 
 # ============================
@@ -89,6 +87,49 @@ function inputlayerspec(; name::Symbol, h::Int64=0, w::Int64=0, outch::Int64=0, 
 end
 
 
+"""
+    outputlayerspec(; name::Symbol, activation::Symbol, optimization::Symbol=:none, output::Int64)
+
+Create a LayerSpec for an output layer with specified activation function.
+
+# Arguments
+- `name::Symbol`: Name of the output layer
+- `activation::Symbol`: Output activation function - must be one of `:softmax`, `:logistic`, or `:regression`
+- `optimization::Symbol=:none`: Optimization method (`:none`, `:adam`, or `:adamw`)
+- `output::Int64`: Number of output units
+
+# Examples
+```julia
+# For multiclass classification (10 classes)
+outputlayerspec(name=:output, activation=:softmax, output=10)
+
+# For binary classification  
+outputlayerspec(name=:output, activation=:logistic, output=1)
+
+# For regression
+outputlayerspec(name=:output, activation=:regression, output=1)
+
+# With optimization
+outputlayerspec(name=:output, activation=:softmax, optimization=:adam, output=10)
+```
+"""
+function outputlayerspec(; name::Symbol, activation::Symbol, optimization::Symbol=:none, output::Int64)
+    
+    # Validate that the activation function is appropriate for output layers
+    if !in(activation, [:softmax, :logistic, :regression])
+        error("Output layer activation must be one of :softmax, :logistic, :regression. Input was :$activation")
+    end
+    
+    # Validate that output is positive
+    if output <= 0
+        error("Output layer must have at least 1 output unit. Input was $output")
+    end
+    
+    # Create LayerSpec - output layers are essentially linear layers with specific activations
+    # normalization defaults to :none and should not be specified for output layers
+    LayerSpec(name=name, kind=:linear, activation=activation, 
+                optimization=optimization, h=output)
+end
 
 # ============================
 # Structs for layers: hold pre-allocated weights, bias, data storage
