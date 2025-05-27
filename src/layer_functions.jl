@@ -14,11 +14,27 @@ using LoopVectorization
 
 
 # ConvLayer
+# functor-style call for feedforward
 
-function layer_forward!(layer::ConvLayer, x::AbstractArray{ELT,4})
+"""
+    (layer::ConvLayer)(x::AbstractArray{ELT, 4})
+
+Perform the forward pass of a convolutional layer on a 4D input tensor.
+
+# Arguments
+- `layer::ConvLayer`: The convolutional layer containing weights, biases, and other parameters which will
+dispatch to this function, so the argument is both function call and argument.
+- `x::AbstractArray{ELT, 4}`: Input tensor with dimensions (height, width, channels, batch_size)
+
+# Returns
+Nothing. Results are stored in-place in `layer.a`.
+
+# Note
+This implementation uses `@turbo` from LoopVectorization.jl for performance optimization.
+The tensor dimensions follow Julia's column-major convention: (height, width, channels, batch).
+"""
+function (layer::ConvLayer)(x::AbstractArray{ELT, 4})
     layer.a_below .= x   # as an alias, this might not work for backprop though it seems to
-
-    # fill!(layer.z, ELT(0.0))
 
     if layer.padrule == :same  # we know padding = 1 for :same
         @views layer.pad_x[begin+1:end-1, begin+1:end-1, :, :] .= x
@@ -34,7 +50,6 @@ function layer_forward!(layer::ConvLayer, x::AbstractArray{ELT,4})
     else
         fill!(layer.z, ELT(0.0))
     end
-
 
     # Combine bias initialization with convolution in a single pass
     @turbo for b in axes(layer.z, 4)  # batch
@@ -64,8 +79,26 @@ function layer_forward!(layer::ConvLayer, x::AbstractArray{ELT,4})
     return
 end
 
+# functor-style call for back propagation
+"""
+    (layer::ConvLayer)(layer_above)
 
-function layer_backward!(layer::ConvLayer, layer_above)
+Perform the backward pass (backpropagation) for a convolutional layer.
+
+# Arguments
+- `layer::ConvLayer`: The convolutional layer containing weights, gradients, and other parameters, so the argument is both function call and argument.
+- `layer_above`: The layer above in the network, containing error gradients
+
+# Returns
+Nothing. Gradients are computed and stored in-place in `layer.grad_weight`, 
+`layer.grad_bias` (if `layer.dobias` is true), and `layer.eps_l` (for propagating 
+errors to lower layers).
+
+# Note
+This implementation applies the chain rule through activation functions, normalization,
+and the convolution operation to compute gradients for all parameters.
+"""
+function (layer::ConvLayer)(layer_above)
     f_h, f_w, ic, oc = size(layer.weight)
     H_out, W_out, _, n_samples = size(layer.eps_l)
 
@@ -157,7 +190,25 @@ end
 # MaxPoolLayer
 
 # note: this implicitly assumes stride is the size of the patch
-function layer_forward!(layer::MaxPoolLayer, x::Array{ELT,4})
+# functor style call for feedforward
+"""
+    (layer::MaxPoolLayer)(x::Array{ELT, 4})
+
+Perform the forward pass of a max pooling layer on a 4D input tensor.
+
+# Arguments
+- `layer::MaxPoolLayer`: The max pooling layer containing pooling parameters, so the argument is both function call and input argument.
+- `x::Array{ELT, 4}`: Input tensor with dimensions (height, width, channels, batch_size)
+
+# Returns
+Nothing. Results are stored in-place in `layer.a`. The positions of maximum values
+are recorded in `layer.mask` for use during backpropagation.
+
+# Note
+This implementation assumes the stride equals the pool size, resulting in non-overlapping
+pooling windows.
+"""
+function (layer::MaxPoolLayer)(x::Array{ELT, 4})
     (pool_h, pool_w) = layer.pool_size
     (H_out, W_out, C, B) = size(layer.a)
     # re-initialize
@@ -193,8 +244,26 @@ function layer_forward!(layer::MaxPoolLayer, x::Array{ELT,4})
     return
 end
 
+# functor-style call for back propagation
+"""
+    (layer::MaxPoolLayer)(layer_above)
 
-function layer_backward!(layer::MaxPoolLayer, layer_above)
+Perform the backward pass (backpropagation) for a max pooling layer.
+
+# Arguments
+- `layer::MaxPoolLayer`: The max pooling layer containing pooling parameters and mask, so the argument is both function call and input argument.
+- `layer_above`: The layer above in the network, containing error gradients
+
+# Returns
+Nothing. Error gradients are propagated through the max pooling layer and stored
+in-place in `layer.eps_l`, with gradients routed only through the positions that
+were selected during the forward pass (as recorded in `layer.mask`).
+
+# Note
+This implementation ensures that gradients flow only through the maximum value
+positions identified during the forward pass.
+"""
+function (layer::MaxPoolLayer)(layer_above)
     fill!(layer.eps_l, ELT(0.0))
     (pool_h, pool_w) = layer.pool_size
     @inbounds for bn in axes(layer_above.eps_l, 4)  # @inbounds
@@ -217,8 +286,23 @@ end
 
 
 # FlattenLayer
+# functor-style call for feedforward
+"""
+    (layer::FlattenLayer)(x::AbstractArray{ELT, 4})
 
-function layer_forward!(layer::FlattenLayer, x::Array{ELT,4})
+Perform the forward pass of a flatten layer, converting a 4D tensor to a 2D matrix.
+
+# Arguments
+- `layer::FlattenLayer`: The flatten layer, so the argument is both function call and input argument.
+- `x::AbstractArray{ELT, 4}`: Input tensor with dimensions (height, width, channels, batch_size)
+
+# Returns
+Nothing. Results are stored in-place in `layer.a` with dimensions (height*width*channels, batch_size).
+
+# Note
+This implementation preserves batch dimension while flattening the spatial and channel dimensions.
+"""
+function (layer::FlattenLayer)(x::AbstractArray{ELT, 4})
     h, w, ch, _ = size(x)
     for b in axes(x, 4)  # iterate over batch dimension  
         @turbo for c in axes(x, 3)  # iterate over channels
@@ -237,7 +321,25 @@ function layer_forward!(layer::FlattenLayer, x::Array{ELT,4})
 end
 
 
-function layer_backward!(layer::FlattenLayer, layer_above::LinearLayer)
+# functor-style call for back propagation
+"""
+    (layer::FlattenLayer)(layer_above::LinearLayer)
+
+Perform the backward pass (backpropagation) for a flatten layer.
+
+# Arguments
+- `layer::FlattenLayer`: The flatten layer, so the argument is both function call and input argument.
+- `layer_above::LinearLayer`: The linear layer above, containing error gradients
+
+# Returns
+Nothing. Error gradients are reshaped from the 2D format of the linear layer back
+to the 4D format of convolutional layers and stored in-place in `layer.eps_l`.
+
+# Note
+This implementation uses matrix multiplication with the transposed weights of the
+layer above to compute gradients, then reshapes them to the original 4D format.
+"""
+function (layer::FlattenLayer)(layer_above::LinearLayer)
     # Use pre-allocated dl_dflat array for matrix multiplication
     mul!(layer.dl_dflat, layer_above.weight', layer_above.eps_l)  # in-place matrix multiplication
 
@@ -259,9 +361,27 @@ end
 
 
 
-# LinearLayer
+# LinearLayer functors
 
-function layer_forward!(layer::LinearLayer, x::Matrix{ELT})
+# functor style call for feedforward
+"""
+    (layer::LinearLayer)(x::Matrix{ELT})
+
+Perform the forward pass of a linear (fully connected) layer on a 2D input matrix.
+
+# Arguments
+- `layer::LinearLayer`: The linear layer containing weights, biases, and other parameters, so the argument is both function call and input argument.
+- `x::Matrix{ELT}`: Input matrix with dimensions (features, batch_size)
+
+# Returns
+Nothing. Results are stored in-place in `layer.a` after applying weights, biases,
+normalization, and activation functions.
+
+# Note
+This implementation uses in-place matrix multiplication and optimized broadcasting
+for bias addition to minimize memory allocations.
+"""
+function (layer::LinearLayer)(x::Matrix{ELT})
     mul!(layer.z, layer.weight, x)  # in-place matrix multiplication
 
     # bias: explicit loop faster than broadcasting
@@ -281,7 +401,26 @@ function layer_forward!(layer::LinearLayer, x::Matrix{ELT})
     return
 end
 
-function layer_backward!(layer::LinearLayer, layer_above::LinearLayer)
+# functor-style call for back propagation
+"""
+    (layer::LinearLayer)(layer_above::LinearLayer)
+
+Perform the backward pass (backpropagation) for a linear (fully connected) layer.
+
+# Arguments
+- `layer::LinearLayer`: The linear layer containing weights, biases, and other parameters, so the argument is both function call and input argument.
+- `layer_above::LinearLayer`: The layer above in the network, containing error gradients
+
+# Returns
+Nothing. Gradients are computed and stored in-place in `layer.grad_weight`, 
+`layer.grad_bias` (if `layer.dobias` is true), and `layer.eps_l` (for propagating 
+errors to lower layers).
+
+# Note
+This implementation handles both output and hidden layers differently, applying
+appropriate activation gradients and normalization gradients as needed.
+"""
+function (layer::LinearLayer)(layer_above::LinearLayer)
     n_samples = size(layer.eps_l,2)
     inverse_n_samples = ELT(1.0) / ELT(n_samples)
     if layer.isoutput

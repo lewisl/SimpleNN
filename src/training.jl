@@ -270,7 +270,7 @@ function feedforward!(layers::Vector{<:Layer}, x)
     layers[begin].a .= x
     @inbounds for (i, lr) in zip(2:length(layers), layers[2:end])  # assumes that layers[1] MUST be input layer without checking!
         # dispatch on type of lr
-        layer_forward!(lr, (layers[i-1].a))
+        lr(layers[i-1].a)
     end
     return
 end
@@ -278,12 +278,12 @@ end
 function backprop!(layers::Vector{<:Layer}, y)
     # output layer is different
     dloss_dz!(layers[end], y)
-    layer_backward!(layers[end], layers[end-1])
+    layers[end](layers[end-1])
 
     # skip over output layer (end) and input layer (begin)
     nlayers = length(layers)
     @inbounds @views for (i, lr) in zip((nlayers-1):-1:2 , reverse(layers[begin+1:end-1]))
-        layer_backward!(lr, layers[i+1])
+        lr(layers[i+1])
     end
     return
 end
