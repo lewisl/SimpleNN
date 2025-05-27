@@ -25,6 +25,7 @@ the weights and arrays required during model training.
 Base.@kwdef struct LayerSpec
     name::Symbol = :noname
     kind::Symbol = :none
+    isoutput::Bool = false
     activation::Symbol = :none  # options are :relu, :leaky_relu, :logistic;  for output layer only :softmax, :regression
     normalization::Symbol = :none  # options are :none, :batchnorm
     optimization::Symbol = :none  # options are :none :adam :adamw
@@ -41,22 +42,22 @@ end
 
 # LayerSpec methods for specific kinds of layers
 """
-    convlayerspec(;name::Symbol, activation::Symbol, adj::ELT=0.002, h::Int64=0, w::Int64=0, outch::Int64=0, f_h::Int64, f_w::Int64, inch::Int64=0, padrule::Symbol=:same)
+    convlayerspec(;name::Symbol, isoutput::Bool, activation::Symbol, adj::ELT=0.002, h::Int64=0, w::Int64=0, outch::Int64=0, f_h::Int64, f_w::Int64, inch::Int64=0, padrule::Symbol=:same)
 
 Only inputs needed for a convlayer are passed to the LayerSpec.
 Note that h, w, and inch will be calculated from the previous layer,
 which should be an image input, another conv layer, or a maxpooling layer.
 You must provide inputs for name, activation, outch, f_h, and f_w.
 """
-function convlayerspec(; name::Symbol, activation::Symbol=:relu, normalization::Symbol=:none, optimization::Symbol=:none, 
+function convlayerspec(; name::Symbol, activation::Symbol=:relu, normalization::Symbol=:none, optimization::Symbol=:none, isoutput=false,
         adj::ELT=ELT(0.002), h::Int64=0, w::Int64=0, outch::Int64, f_h::Int64, f_w::Int64, inch::Int64=0, padrule::Symbol=:same)
-    LayerSpec(name=name, kind=:conv, activation=activation, normalization=normalization, optimization=optimization, 
+    LayerSpec(name=name, kind=:conv, activation=activation, normalization=normalization, optimization=optimization, isoutput=isoutput,
                 adj=adj, h=h, w=w, outch=outch, f_h=f_h, f_w=f_w, inch=inch, padrule=padrule)
 end
 
 function linearlayerspec(; name::Symbol, activation::Symbol=:relu, normalization::Symbol=:none, optimization::Symbol=:none, 
-        adj::ELT=ELT(0.002), output::Int64)
-    LayerSpec(name=name, kind=:linear, activation=activation, normalization=normalization, optimization=optimization, adj=adj, h=output)
+        isoutput=false, adj::ELT=ELT(0.002), output::Int64)
+    LayerSpec(name=name, kind=:linear, isoutput=isoutput, activation=activation, normalization=normalization, optimization=optimization, adj=adj, h=output)
 end
 
 function maxpoollayerspec(; name::Symbol, f_h::Int, f_w::Int)
@@ -127,7 +128,7 @@ function outputlayerspec(; name::Symbol, activation::Symbol, optimization::Symbo
     
     # Create LayerSpec - output layers are essentially linear layers with specific activations
     # normalization defaults to :none and should not be specified for output layers
-    LayerSpec(name=name, kind=:linear, activation=activation, 
+    LayerSpec(name=name, kind=:linear, activation=activation, isoutput=true,
                 optimization=optimization, h=output)
 end
 
@@ -177,6 +178,7 @@ Base.@kwdef struct ConvLayer <: Layer
     padrule::Symbol  # = :same   # other option is :none
     stride::Int64  # = 1     # assume stride is symmetrical for now
     dobias::Bool  # = true
+    isoutput::Bool
 end
 
 # this method assigns every field with default initialization or values based on layerspec inputs
@@ -274,7 +276,8 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
         optimization=lr.optimization,
         padrule=lr.padrule,
         stride=lr.stride,
-        dobias=dobias
+        dobias=dobias,
+        isoutput=lr.isoutput
     )
 end
 
@@ -311,10 +314,11 @@ Base.@kwdef struct LinearLayer <: Layer
     normalization_gradf::Function
 
     # scalar parameters
-    name::Symbol       #  = :noname
-    optimization::Symbol     # = :none
-    adj::ELT   #      = 0.0
-    dobias::Bool    #             = true
+    name::Symbol      
+    optimization::Symbol     
+    adj::ELT   
+    dobias::Bool    
+    isoutput::Bool   # is this the output layer?
 end
 
 # this method assigns every field with default initialization or values based on layerspec inputs
@@ -412,7 +416,8 @@ function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
         name=lr.name,
         optimization=lr.optimization,
         adj=lr.adj,
-        dobias=dobias
+        dobias=dobias,
+        isoutput=lr.isoutput
         )
 end
 
@@ -423,6 +428,7 @@ Base.@kwdef struct FlattenLayer <: Layer
     dl_dflat::Array{ELT,2} = ELT[;;]
     a::Array{ELT,2} = ELT[;;]
     eps_l::Array{ELT,4} = ELT[;;;;]
+    isoutput::Bool
 end
 
 # constructor method to prepare inputs and create layer
@@ -435,7 +441,8 @@ function FlattenLayer(lr::LayerSpec, prevlayer, n_samples)
         output_dim=output_dim,
         a=zeros(ELT, output_dim, n_samples),
         dl_dflat=zeros(ELT, output_dim, n_samples),
-        eps_l=zeros(ELT, h, w, ch, n_samples)
+        eps_l=zeros(ELT, h, w, ch, n_samples),
+        isoutput=lr.isoutput
     )
 end
 
@@ -455,6 +462,7 @@ Base.@kwdef struct MaxPoolLayer <: Layer
     a::Array{ELT,4} = ELT[;;;;]
     mask::Array{Bool,4} = Bool[;;;;]
     eps_l::Array{ELT,4} = ELT[;;;;]
+    isoutput::Bool
 end
 
 # constructor method to prepare inputs and create layer
@@ -471,5 +479,6 @@ function MaxPoolLayer(lr::LayerSpec, prevlayer, n_samples)
         a=zeros(ELT, out_h, out_w, outch, batch_size),
         mask=falses(in_h, in_w, outch, batch_size),
         eps_l=zeros(ELT, in_h, in_w, outch, batch_size),
+        isoutput=lr.isoutput
     )
 end

@@ -15,7 +15,7 @@ using LoopVectorization
 
 # ConvLayer
 
-function layer_forward!(layer::ConvLayer, x::AbstractArray{ELT,4}, batch_size)
+function layer_forward!(layer::ConvLayer, x::AbstractArray{ELT,4})
     layer.a_below .= x   # as an alias, this might not work for backprop though it seems to
 
     # fill!(layer.z, ELT(0.0))
@@ -65,9 +65,9 @@ function layer_forward!(layer::ConvLayer, x::AbstractArray{ELT,4}, batch_size)
 end
 
 
-function layer_backward!(layer::ConvLayer, layer_above, n_samples)
+function layer_backward!(layer::ConvLayer, layer_above)
     f_h, f_w, ic, oc = size(layer.weight)
-    H_out, W_out, _, _ = size(layer.eps_l)
+    H_out, W_out, _, n_samples = size(layer.eps_l)
 
 
     fill!(layer.grad_weight, ELT(0.0))  # reinitialization to allow accumulation of convolutions
@@ -157,7 +157,7 @@ end
 # MaxPoolLayer
 
 # note: this implicitly assumes stride is the size of the patch
-function layer_forward!(layer::MaxPoolLayer, x::Array{ELT,4}, n_samples)
+function layer_forward!(layer::MaxPoolLayer, x::Array{ELT,4})
     (pool_h, pool_w) = layer.pool_size
     (H_out, W_out, C, B) = size(layer.a)
     # re-initialize
@@ -194,7 +194,7 @@ function layer_forward!(layer::MaxPoolLayer, x::Array{ELT,4}, n_samples)
 end
 
 
-function layer_backward!(layer::MaxPoolLayer, layer_above, n_samples)
+function layer_backward!(layer::MaxPoolLayer, layer_above)
     fill!(layer.eps_l, ELT(0.0))
     (pool_h, pool_w) = layer.pool_size
     @inbounds for bn in axes(layer_above.eps_l, 4)  # @inbounds
@@ -218,7 +218,7 @@ end
 
 # FlattenLayer
 
-function layer_forward!(layer::FlattenLayer, x::Array{ELT,4}, batch_size)
+function layer_forward!(layer::FlattenLayer, x::Array{ELT,4})
     h, w, ch, _ = size(x)
     for b in axes(x, 4)  # iterate over batch dimension  
         @turbo for c in axes(x, 3)  # iterate over channels
@@ -237,12 +237,12 @@ function layer_forward!(layer::FlattenLayer, x::Array{ELT,4}, batch_size)
 end
 
 
-function layer_backward!(layer::FlattenLayer, layer_above::LinearLayer, batch_size)
+function layer_backward!(layer::FlattenLayer, layer_above::LinearLayer)
     # Use pre-allocated dl_dflat array for matrix multiplication
     mul!(layer.dl_dflat, layer_above.weight', layer_above.eps_l)  # in-place matrix multiplication
 
     # Reshape in-place using explicit indexing
-    h, w, ch, _ = size(layer.eps_l)
+    h, w, ch, batch_size = size(layer.eps_l)
     for b in 1:batch_size
         idx = 1
         @turbo for c in 1:ch
@@ -261,7 +261,7 @@ end
 
 # LinearLayer
 
-function layer_forward!(layer::LinearLayer, x::Matrix{ELT}, batch_size)
+function layer_forward!(layer::LinearLayer, x::Matrix{ELT})
     mul!(layer.z, layer.weight, x)  # in-place matrix multiplication
 
     # bias: explicit loop faster than broadcasting
@@ -281,12 +281,13 @@ function layer_forward!(layer::LinearLayer, x::Matrix{ELT}, batch_size)
     return
 end
 
-function layer_backward!(layer::LinearLayer, layer_above::LinearLayer, n_samples; output=false)
+function layer_backward!(layer::LinearLayer, layer_above::LinearLayer)
+    n_samples = size(layer.eps_l,2)
     inverse_n_samples = ELT(1.0) / ELT(n_samples)
-    if output
+    if layer.isoutput
         # layer.eps_l calculated by prior call to dloss_dz
         mul!(layer.grad_weight, layer.eps_l, layer.a_below')  # in-place matrix multiplication
-        layer.grad_weight .*= (ELT(1.0) / n_samples)  # in-place scaling
+        layer.grad_weight .*= inverse_n_samples  # in-place scaling
     else  # this is hidden layer
         layer.activation_gradf(layer)  # calculates layer.grad_a
         mul!(layer.eps_l, layer_above.weight', layer_above.eps_l)  # in-place matrix multiplication
@@ -295,7 +296,7 @@ function layer_backward!(layer::LinearLayer, layer_above::LinearLayer, n_samples
         layer.normalization_gradf(layer) # either noop or batchnorm_grad!
 
         mul!(layer.grad_weight, layer.eps_l, layer.a_below')  # in-place matrix multiplication
-        layer.grad_weight .*= (ELT(1.0) / n_samples)  # in-place scaling
+        layer.grad_weight .*= inverse_n_samples # in-place scaling
     end
 
     # Compute bias gradient efficiently without allocations

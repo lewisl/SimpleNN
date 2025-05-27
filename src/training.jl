@@ -266,24 +266,24 @@ end
 # Training Loop
 # ============================
 
-function feedforward!(layers::Vector{<:Layer}, x, n_samples)
+function feedforward!(layers::Vector{<:Layer}, x)
     layers[begin].a .= x
     @inbounds for (i, lr) in zip(2:length(layers), layers[2:end])  # assumes that layers[1] MUST be input layer without checking!
         # dispatch on type of lr
-        layer_forward!(lr, (layers[i-1].a), n_samples)
+        layer_forward!(lr, (layers[i-1].a))
     end
     return
 end
 
-function backprop!(layers::Vector{<:Layer}, y, n_samples)
+function backprop!(layers::Vector{<:Layer}, y)
     # output layer is different
     dloss_dz!(layers[end], y)
-    layer_backward!(layers[end], layers[end-1], n_samples; output=true)
+    layer_backward!(layers[end], layers[end-1])
 
     # skip over output layer (end) and input layer (begin)
-    @inbounds @views for (j, lr) in enumerate(reverse(layers[begin+1:end-1]))
-        i = length(layers) - j
-        layer_backward!(lr, layers[i+1], n_samples)
+    nlayers = length(layers)
+    @inbounds @views for (i, lr) in zip((nlayers-1):-1:2 , reverse(layers[begin+1:end-1]))
+        layer_backward!(lr, layers[i+1])
     end
     return
 end
@@ -458,9 +458,9 @@ function train_loop!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size
 
             print("counter = ", counter, "\r")
             flush(stdout)
-            feedforward!(layers, x_part, n_samples)
+            feedforward!(layers, x_part)
 
-            backprop!(layers, y_part, n_samples)
+            backprop!(layers, y_part)
 
             update_weight_loop!(layers, hp, counter)
 
@@ -533,7 +533,7 @@ function minibatch_prediction(layers::Vector{Layer}, x, y, costfunc = cross_entr
             y_part = y
         end
 
-        feedforward!(layers, x_part, n_samples)
+        feedforward!(layers, x_part)
 
         # stats per batch: can't use x_part because that is input, layer 1
         @views preds .= layers[end].a
@@ -551,7 +551,7 @@ end
 
 function prediction(predlayers::Vector{<:Layer}, x_input, y_input)
     n_samples = size(x_input, ndims(x_input))
-    feedforward!(predlayers, x_input, n_samples)
+    feedforward!(predlayers, x_input)
     preds = predlayers[end].a
     acc = accuracy(preds, y_input)
     cost = cross_entropy_cost(preds, y_input, n_samples)
