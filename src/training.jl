@@ -421,7 +421,7 @@ function update_weight_loop!(layers::Vector{<:Layer}, hp, counter)
     end
 end
 
-function train_loop!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size=0, hp=default_hp) where L <: Layer
+function train!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size=0, hp=default_hp) where L <: Layer
 
     # setup minibatches
     if minibatch_size == 0

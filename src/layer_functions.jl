@@ -33,7 +33,7 @@ Nothing. Results are stored in-place in `layer.a`.
 This implementation uses `@turbo` from LoopVectorization.jl for performance optimization.
 The tensor dimensions follow Julia's column-major convention: (height, width, channels, batch).
 """
-function (layer::ConvLayer)(x::AbstractArray{ELT, 4})
+function (layer::ConvLayer)(x::AbstractArray{ELT,4})
     layer.a_below .= x   # as an alias, this might not work for backprop though it seems to
 
     if layer.padrule == :same  # we know padding = 1 for :same
@@ -45,7 +45,7 @@ function (layer::ConvLayer)(x::AbstractArray{ELT, 4})
     # initialize output z with 0.0f0 if nobias or with bias: when dobias==false, layer.bias remains as initialized to zeros
     if layer.dobias
         for oc in axes(layer.z, 3)
-            @turbo @views layer.z[:,:,oc,:] .= layer.bias[oc]
+            @turbo @views layer.z[:, :, oc, :] .= layer.bias[oc]
         end
     else
         fill!(layer.z, ELT(0.0))
@@ -90,8 +90,8 @@ Perform the backward pass (backpropagation) for a convolutional layer.
 - `layer_above`: The layer above in the network, containing error gradients
 
 # Returns
-Nothing. Gradients are computed and stored in-place in `layer.grad_weight`, 
-`layer.grad_bias` (if `layer.dobias` is true), and `layer.eps_l` (for propagating 
+Nothing. Gradients are computed and stored in-place in `layer.grad_weight`,
+`layer.grad_bias` (if `layer.dobias` is true), and `layer.eps_l` (for propagating
 errors to lower layers).
 
 # Note
@@ -106,7 +106,7 @@ function (layer::ConvLayer)(layer_above)
     fill!(layer.grad_weight, ELT(0.0))  # reinitialization to allow accumulation of convolutions
     fill!(layer.eps_l, ELT(0.0))
     fill!(layer.grad_a, ELT(0.0))
-    inverse_n_samples =  ELT(1.0) / ELT(n_samples)
+    inverse_n_samples = ELT(1.0) / ELT(n_samples)
 
     layer.activation_gradf(layer)
 
@@ -124,8 +124,8 @@ function (layer::ConvLayer)(layer_above)
 
     @turbo for b in axes(layer.eps_l, 4)
         for oc in axes(layer.weight, 4)
-            for i = 1:H_out-(f_h-1) # prevent filter from extending out of bounds
-                for j = 1:W_out-(f_w-1)
+            for j = 1:W_out-(f_w-1)
+                for i = 1:H_out-(f_h-1) # prevent filter from extending out of bounds
                     for ic in axes(layer.weight, 3)
                         for fj in axes(layer.weight, 2)
                             for fi in axes(layer.weight, 1)
@@ -142,8 +142,8 @@ function (layer::ConvLayer)(layer_above)
     # compute gradients
     compute_grad_weight!(layer, n_samples)
 
-    if layer.dobias 
-        layer.grad_bias .= reshape(sum(layer_above.eps_l, dims=(1, 2, 4)), oc)  .* inverse_n_samples
+    if layer.dobias
+        layer.grad_bias .= reshape(sum(layer_above.eps_l, dims=(1, 2, 4)), oc) .* inverse_n_samples
     end
 
     return     # nothing
@@ -208,7 +208,7 @@ are recorded in `layer.mask` for use during backpropagation.
 This implementation assumes the stride equals the pool size, resulting in non-overlapping
 pooling windows.
 """
-function (layer::MaxPoolLayer)(x::Array{ELT, 4})
+function (layer::MaxPoolLayer)(x::Array{ELT,4})
     (pool_h, pool_w) = layer.pool_size
     (H_out, W_out, C, B) = size(layer.a)
     # re-initialize
@@ -284,7 +284,6 @@ function (layer::MaxPoolLayer)(layer_above)
 end
 
 
-
 # FlattenLayer
 # functor-style call for feedforward
 """
@@ -302,13 +301,13 @@ Nothing. Results are stored in-place in `layer.a` with dimensions (height*width*
 # Note
 This implementation preserves batch dimension while flattening the spatial and channel dimensions.
 """
-function (layer::FlattenLayer)(x::AbstractArray{ELT, 4})
+function (layer::FlattenLayer)(x::AbstractArray{ELT,4})
     h, w, ch, _ = size(x)
-    for b in axes(x, 4)  # iterate over batch dimension  
+    for b in axes(x, 4)  # iterate over batch dimension
         @turbo for c in axes(x, 3)  # iterate over channels
-            c_offset = (c-1)*h*w
+            c_offset = (c - 1) * h * w
             for j in axes(x, 2)  # iterate over width
-                j_offset = (j-1)*h
+                j_offset = (j - 1) * h
                 for i in axes(x, 1)  # iterate over height
                     idx = c_offset + j_offset + i
                     # println("idx ", idx, " tdx ", tdx)
@@ -360,10 +359,8 @@ function (layer::FlattenLayer)(layer_above::LinearLayer)
 end
 
 
-
 # LinearLayer functors
 
-# functor style call for feedforward
 """
     (layer::LinearLayer)(x::Matrix{ELT})
 
@@ -401,7 +398,7 @@ function (layer::LinearLayer)(x::Matrix{ELT})
     return
 end
 
-# functor-style call for back propagation
+
 """
     (layer::LinearLayer)(layer_above::LinearLayer)
 
@@ -412,8 +409,8 @@ Perform the backward pass (backpropagation) for a linear (fully connected) layer
 - `layer_above::LinearLayer`: The layer above in the network, containing error gradients
 
 # Returns
-Nothing. Gradients are computed and stored in-place in `layer.grad_weight`, 
-`layer.grad_bias` (if `layer.dobias` is true), and `layer.eps_l` (for propagating 
+Nothing. Gradients are computed and stored in-place in `layer.grad_weight`,
+`layer.grad_bias` (if `layer.dobias` is true), and `layer.eps_l` (for propagating
 errors to lower layers).
 
 # Note
@@ -421,7 +418,7 @@ This implementation handles both output and hidden layers differently, applying
 appropriate activation gradients and normalization gradients as needed.
 """
 function (layer::LinearLayer)(layer_above::LinearLayer)
-    n_samples = size(layer.eps_l,2)
+    n_samples = size(layer.eps_l, 2)
     inverse_n_samples = ELT(1.0) / ELT(n_samples)
     if layer.isoutput
         # layer.eps_l calculated by prior call to dloss_dz

@@ -28,15 +28,9 @@ Base.@kwdef struct BatchNorm{T<:AbstractArray} <: NormParam  # can this work for
     istraining::Ref{Bool} = true     # set to false for inference or prediction
 end
 
-struct NoNorm <: NormParam 
+struct NoNorm <: NormParam
     @inline NoNorm() = new()   # help compiler elide any call to empty constructor
 end   # a noop struct when not doing Batch Normalization
-
-
-
-
-
-
 
 
 function batchnorm!(layer::LinearLayer)
@@ -100,7 +94,7 @@ function batchnorm_grad!(layer::LinearLayer)
         for i in axes(layer.eps_l, 1)
             bn.grad_bet[j] += layer.eps_l[i,j] * inverse_mb_size
         end
-    end 
+    end
     # replace one-liner with vectorized loop: bn.grad_gam .= sum(layer.eps_l .* layer.z_norm, dims=2)  .* inverse_mb_size  # ./ mb
     fill!(bn.grad_gam, ELT(0.0))
     @turbo for j in axes(layer.eps_l, 2)
@@ -241,7 +235,7 @@ Base.@kwdef struct AdamParam <: OptParam
     decay::ELT  # for AdamW, often called lambda
 end
 
-struct NoOpt <: OptParam 
+struct NoOpt <: OptParam
     @inline NoOpt() = new()   # help compiler elide any call to empty constructor
 end   # a noop struct when not doing Batch Normalization
 
@@ -258,7 +252,7 @@ end
 # TODO we should test for this earlier and not have to test again within the function
 @inline function pre_adam_batchnorm!(bn, ad, t)
     adam_helper!(bn.grad_m_gam, bn.grad_v_gam, bn.grad_gam, ad, t)
-    adam_helper!(bn.grad_m_bet, bn.grad_v_bet, bn.grad_bet, ad, t)        
+    adam_helper!(bn.grad_m_bet, bn.grad_v_bet, bn.grad_bet, ad, t)
 end
 
 @inline function adam_helper!(grad_m_lrparam, grad_v_lrparam, grad_lrparam, ad, t)

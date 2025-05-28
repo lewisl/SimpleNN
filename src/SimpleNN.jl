@@ -1,5 +1,5 @@
 """
-Module Convolution:
+Module SimpleNN
 
 """
 module SimpleNN
@@ -36,11 +36,11 @@ export
 # creating layerspecs to define a model
 export
     LayerSpec,          # constructor for a specification of any type of layer
+    inputlayerspec,      # constructor for the spec of the input layer
     convlayerspec,      # constructor with only inputs needed for a convolutional layer
     linearlayerspec,    # constructor with only inputs needed for a linear layer
     flattenlayerspec,   # constructor with only inputs needed for a flatten layer
     maxpoollayerspec,    # constructor with only inputs needed for a maxpooling layer
-    inputlayerspec,      # constructor for the spec of the input layer
     outputlayerspec     # constructor for an output layer
 
 # functions you can use
@@ -51,8 +51,7 @@ export
     setup_preds,
     prediction,
     minibatch_prediction,
-    train_loop!,
-    prediction,
+    train!,
     display_mnist_digit,
     weights2file,
     file2weights,
@@ -69,4 +68,4 @@ export
 
 
 
-end  # module ConvLayer
+end  # module SimpleNN

@@ -1,3 +1,4 @@
+# script for running and testing different network structures
 # %% packages and inputs
 
 
@@ -73,7 +74,7 @@ end;
 
 # %%
 
-stats = train_loop!(layers; x=x_train, y=y_train, full_batch=full_batch,
+stats = train!(layers; x=x_train, y=y_train, full_batch=full_batch,
     epochs=epochs, minibatch_size=minibatch_size, hp=hp);
 
 

@@ -172,12 +172,12 @@ Base.@kwdef struct ConvLayer <: Layer
     optparams::OptParam
 
     # scalar parameters
-    name::Symbol  # = :noname
-    optimization::Symbol  # = :none
-    adj::ELT  # = 0.0
-    padrule::Symbol  # = :same   # other option is :none
-    stride::Int64  # = 1     # assume stride is symmetrical for now
-    dobias::Bool  # = true
+    name::Symbol  
+    optimization::Symbol  
+    adj::ELT  
+    padrule::Symbol  # can be :same or :none
+    stride::Int64  
+    dobias::Bool  
     isoutput::Bool
 end
 
@@ -193,7 +193,7 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
     if lr.normalization == :batchnorm
             normalizationf = batchnorm!
             normalization_gradf = batchnorm_grad!
-            normparams=BatchNorm{Vector{ELT}}(gam=ones(ELT, outch), bet=zeros(ELT, outch),
+            normparams = BatchNorm{Vector{ELT}}(gam=ones(ELT, outch), bet=zeros(ELT, outch),
                 grad_gam=zeros(ELT, outch), grad_bet=zeros(ELT, outch),
                 grad_m_gam=zeros(ELT, outch), grad_v_gam=zeros(ELT, outch),
                 grad_m_bet=zeros(ELT, outch), grad_v_bet=zeros(ELT, outch),
@@ -218,6 +218,7 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
         else
             error("Only :relu, :leaky_relu and :none  supported, not $(Symbol(lr.activation)).")
         end
+
         if lr.activation == :relu
             activation_gradf=relu_grad!
         elseif lr.activation == :leaky_relu
@@ -325,6 +326,7 @@ end
 function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
     outputs = lr.h        # rows
     inputs = size(prevlayer.a, 1)    # rows of lower layer output become columns
+
     if lr.normalization == :batchnorm
             normalizationf = batchnorm!
             normalization_gradf = batchnorm_grad!
@@ -359,6 +361,7 @@ function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
         else
             error("Only :relu, :leaky_relu, :softmax and :none  supported, not $(Symbol(lr.activation)).")
         end
+
         if lr.activation == :relu  # this has no effect on the output layer, but need it for hidden layers
             activation_gradf=relu_grad!
         elseif lr.activation == :leaky_relu
@@ -379,7 +382,6 @@ function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
         else
             error("Only :none, :adam or :adamw supported, not $(Symbol(lr.optimization)).")
         end
-
 
     LinearLayer(
         # data arrays
@@ -418,7 +420,7 @@ function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
         adj=lr.adj,
         dobias=dobias,
         isoutput=lr.isoutput
-        )
+    )
 end
 
 # no weight, bias, gradients, activation

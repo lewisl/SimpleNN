@@ -75,7 +75,7 @@ end;
 
 # %%
 
-stats = train_loop!(layers; x=x_train, y=y_train, full_batch=full_batch,
+stats = train!(layers; x=x_train, y=y_train, full_batch=full_batch,
     epochs=epochs, minibatch_size=minibatch_size, hp=hp);
 
 
@@ -124,7 +124,7 @@ println("\nTarget digit: ", target_digit, "  Predicted digit: ", pred_digit)
 # --- Profiling the training loop ---
 Profile.clear()
 @profile begin
-    stats = train_loop!(layers; x=x_train, y=y_train, full_batch=full_batch, epochs=epochs, minibatch_size=minibatch_size, hp=hp)
+    stats = train!(layers; x=x_train, y=y_train, full_batch=full_batch, epochs=epochs, minibatch_size=minibatch_size, hp=hp)
 end
 Profile.print()
 
