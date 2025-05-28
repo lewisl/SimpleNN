@@ -195,7 +195,7 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
             normalization_gradf = batchnorm_grad!
             normparams=BatchNorm{Vector{ELT}}(gam=ones(ELT, outch), bet=zeros(ELT, outch),
                 grad_gam=zeros(ELT, outch), grad_bet=zeros(ELT, outch),
-                grad_m_gam=zeros(outch), grad_v_gam=zeros(ELT, outch),
+                grad_m_gam=zeros(ELT, outch), grad_v_gam=zeros(ELT, outch),
                 grad_m_bet=zeros(ELT, outch), grad_v_bet=zeros(ELT, outch),
                 mu=zeros(ELT, outch), stddev=zeros(ELT, outch),
                 mu_run=zeros(ELT, outch), std_run=zeros(ELT, outch))

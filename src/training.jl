@@ -25,7 +25,7 @@ Base.@kwdef mutable struct HyperParameters
 
     function HyperParameters(lr::ELT, reg::Symbol, regparm::ELT, do_stats::Bool)
         if !in(reg, [:none, :L1, :L2])
-            error("reg must be one of :none, :L1, :l2. Input was :$reg")
+            error("reg must be one of :none, :L1, :L2. Input was :$reg")
         end
         new(lr, reg, regparm, do_stats)
     end
@@ -241,11 +241,11 @@ function cross_entropy_cost(pred::AbstractMatrix{ELT}, target::AbstractMatrix{EL
 
     @inbounds for i in eachindex(pred)
         # First term: target * log(max(pred, 1e-20))
-        pred_val = max(pred[i], 1f-20)
+        pred_val = max(pred[i], IT)
         log_sum1 += target[i] * log(pred_val)
 
         # Second term: (1-target) * log(max(1-pred, 1e-20))
-        inv_pred = max(ELT(1.0) - pred[i], 1f-20)
+        inv_pred = max(ELT(1.0) - pred[i], IT)
         log_sum2 += (ELT(1.0) - target[i]) * log(inv_pred)
     end
 
@@ -303,14 +303,14 @@ function update_batchnorm!(layer, hp, t)
 
         # Update gamma (scale) parameter - no weight decay for batch norm
         @turbo for i in eachindex(bn.gam)
-            adam_term = (bn.grad_m_gam[i] * b1_divisor) / (sqrt(bn.grad_v_gam[i] * b2_divisor) + IT)
-            bn.gam[i] -= hp.lr * adam_term
-        end
+            adam_term_gam = (bn.grad_m_gam[i] * b1_divisor) / (sqrt(bn.grad_v_gam[i] * b2_divisor) + IT)
+            bn.gam[i] -= hp.lr * adam_term_gam
+        # end
 
         # Update beta (shift) parameter - no weight decay for batch norm
-        @turbo for i in eachindex(bn.bet)
-            adam_term = (bn.grad_m_bet[i] * b1_divisor) / (sqrt(bn.grad_v_bet[i] * b2_divisor) + IT)
-            bn.bet[i] -= hp.lr * adam_term
+        # @turbo for i in eachindex(bn.bet)
+            adam_term_bet = (bn.grad_m_bet[i] * b1_divisor) / (sqrt(bn.grad_v_bet[i] * b2_divisor) + IT)
+            bn.bet[i] -= hp.lr * adam_term_bet
         end
     else
         # Simple SGD update if not using Adam/AdamW
@@ -368,16 +368,13 @@ function update_weights!(layer::Layer, hp, t)
             bn = layer.normparams
             pre_adam_batchnorm!(bn, ad, t)
             
-            # Update gamma (scale) parameter
+            # Update gamma (scale) parameter and beta (shift parameter)
             @turbo for i in eachindex(bn.gam)
-                adam_term = (bn.grad_m_gam[i] * b1_divisor) / (sqrt(bn.grad_v_gam[i] * b2_divisor) + IT)
-                bn.gam[i] -= hp.lr * adam_term
-            end
+                adam_term_gam = (bn.grad_m_gam[i] * b1_divisor) / (sqrt(bn.grad_v_gam[i] * b2_divisor) + IT)
+                bn.gam[i] -= hp.lr * adam_term_gam
 
-            # Update beta (shift) parameter
-            @turbo for i in eachindex(bn.bet)
-                adam_term = (bn.grad_m_bet[i] * b1_divisor) / (sqrt(bn.grad_v_bet[i] * b2_divisor) + IT)
-                bn.bet[i] -= hp.lr * adam_term
+                adam_term_bet = (bn.grad_m_bet[i] * b1_divisor) / (sqrt(bn.grad_v_bet[i] * b2_divisor) + IT)
+                bn.bet[i] -= hp.lr * adam_term_bet
             end
         end
     else
@@ -397,6 +394,15 @@ function update_weights!(layer::Layer, hp, t)
             end
         end
 
+        # Simple SGD update if not using Adam/AdamW
+        if layer.normparams isa BatchNorm
+            bn = layer.normparams
+            @turbo for i in eachindex(bn.gam)
+                bn.gam[i] -= hp.lr * bn.grad_gam[i]
+                bn.bet[i] -= hp.lr * bn.grad_bet[i]
+            end
+        end
+
         if layer.dobias
             @turbo for i in eachindex(layer.bias)
                 layer.bias[i] -= hp.lr * layer.grad_bias[i]
@@ -412,10 +418,6 @@ function update_weight_loop!(layers::Vector{<:Layer}, hp, counter)
         end
         
         update_weights!(lr, hp, counter)
-
-        if lr.normparams isa BatchNorm  # update only the batchnorm params
-            update_batchnorm!(lr, hp, counter)
-        end
     end
 end
 
@@ -487,7 +489,7 @@ function gather_stats!(stat_series, layers, y_train, counter, batno, epoch; to_c
     end
 
     if to_console
-        println("\nepoch $epoch batch $batno Loss = $loss_val Accuracy = $acc\n")
+        println("\nepoch $epoch batch $batno Loss = $cost Accuracy = $acc\n")
     end
 end
 

@@ -17,7 +17,6 @@ using Serialization
 using MLDatasets
 using StatsBase
 using Statistics
-using LinearAlgebra
 using BenchmarkTools
 
 include("data_layers.jl")
@@ -28,7 +27,6 @@ include("mnist_fun.jl")
 
 # data structures for neural network
 export
-    LayerSpec,
     ConvLayer,
     LinearLayer,
     FlattenLayer,

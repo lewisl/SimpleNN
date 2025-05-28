@@ -165,7 +165,7 @@ end
 function leaky_relu!(layer)
     # @inbounds @fastmath begin
         @turbo for i in eachindex(layer.z)
-            layer.a[i] = ifelse(layer.z[i] >= ELT(0.0), layer.z[i], layer.adj * layer.x[i]) # no allocations
+            layer.a[i] = ifelse(layer.z[i] >= ELT(0.0), layer.z[i], layer.adj * layer.z[i]) # no allocations
         end
     # end
 end

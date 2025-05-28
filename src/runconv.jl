@@ -14,10 +14,10 @@ const ELT = Float32
 # 64 channels is not great
 one_conv = LayerSpec[
     inputlayerspec(h=28, w=28, outch=1, name=:input)
-    convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, optimization=:adamw, normalization=:batchnorm)  # , normalization=:batchnorm  , optimization=:adamw
+    convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, normalization=:batchnorm, optimization=:adamw)  # , normalization=:batchnorm  , optimization=:adamw
     maxpoollayerspec(name=:maxpool1, f_h=2, f_w=2)
     flattenlayerspec(name=:flatten)
-    linearlayerspec(output=200, activation=:relu, name=:linear1, optimization=:adamw, normalization=:batchnorm)
+    linearlayerspec(output=200, activation=:relu, name=:linear1, normalization=:batchnorm, optimization=:adamw)
     outputlayerspec(output=10, activation=:softmax, name=:output)
 ];
 
@@ -111,7 +111,7 @@ y_single = reshape(y_single, :, 1);
 
 display_mnist_digit(x_single)
 
-SimpleNN.feedforward!(pred1layers, x_single, 1);
+SimpleNN.feedforward!(pred1layers, x_single);
 pred1 = pred1layers[end].a;
 
 target_digit = SimpleNN.find_max_idx(y_single[:, 1]) - 1;
