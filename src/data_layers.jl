@@ -2,7 +2,7 @@ using LoopVectorization
 
 # ============================
 # abstract types for layer and normparams
-# forward declaration to permit these to 
+# forward declaration to permit these to
 # be used when defining data layers
 # of the neural network.
 # ============================
@@ -23,26 +23,26 @@ These inputs are used to fully define each type of layer including
 the weights and arrays required during model training.
 """
 Base.@kwdef struct LayerSpec
-    name::Symbol = :noname
-    kind::Symbol = :none
+    name::Symbol
+    kind::Symbol
     isoutput::Bool = false
-    activation::Symbol = :none  # options are :relu, :leaky_relu, :logistic;  for output layer only :softmax, :regression
-    normalization::Symbol = :none  # options are :none, :batchnorm
-    optimization::Symbol = :none  # options are :none :adam :adamw
-    adj::ELT = 0              # leaky_relu factor. also for he_initialize
-    h::Int64 = 0                  # image height (rows) or output neurons for linear layers
-    w::Int64 = 0                  # image width (columns)
-    outch::Int64 = 0              # output channels in image format array
-    f_h::Int64 = 0                # filter height (rows)
-    f_w::Int64 = 0                # filter width (columns)
-    inch::Int64 = 0
-    padrule::Symbol = :same       # either :same or :none
-    stride::Int64 = 1             # no input required to accept default
+    activation::Symbol = :none      # options are :relu, :leaky_relu, :logistic;  for output layer only :softmax, :regression
+    normalization::Symbol = :none   # options are :none, :batchnorm
+    optimization::Symbol = :none    # options are :none :adam :adamw
+    adj::ELT = 0                    # leaky_relu factor. also for he_initialize
+    h::Int64 = 0                    # image height (rows) for conv, flatten, maxpool
+    w::Int64 = 0                    # image width (columns) for conv, flatten, maxpool
+    outch::Int64 = 0                # output channels in image format array
+    outputdim::Int64 = 0            # output neurons for linear layers
+    f_h::Int64 = 0                  # filter height (rows)
+    f_w::Int64 = 0                  # filter width (columns)
+    padrule::Symbol = :same         # either :same or :none
+    stride::Int64 = 1               # no input required to accept default
 end
 
 # LayerSpec methods for specific kinds of layers
 """
-    convlayerspec(;name::Symbol, isoutput::Bool, activation::Symbol, adj::ELT=0.002, h::Int64=0, w::Int64=0, outch::Int64=0, f_h::Int64, f_w::Int64, inch::Int64=0, padrule::Symbol=:same)
+    convlayerspec(;name::Symbol, isoutput::Bool, activation::Symbol, adj::ELT=0.002, h::Int64=0, w::Int64=0, outch::Int64=0, f_h::Int64, f_w::Int64, padrule::Symbol=:same)
 
 Only inputs needed for a convlayer are passed to the LayerSpec.
 Note that h, w, and inch will be calculated from the previous layer,
@@ -50,14 +50,14 @@ which should be an image input, another conv layer, or a maxpooling layer.
 You must provide inputs for name, activation, outch, f_h, and f_w.
 """
 function convlayerspec(; name::Symbol, activation::Symbol=:relu, normalization::Symbol=:none, optimization::Symbol=:none, isoutput=false,
-        adj::ELT=ELT(0.002), h::Int64=0, w::Int64=0, outch::Int64, f_h::Int64, f_w::Int64, inch::Int64=0, padrule::Symbol=:same)
+    adj::ELT=ELT(0.002), outch::Int64, f_h::Int64, f_w::Int64, padrule::Symbol=:same)
     LayerSpec(name=name, kind=:conv, activation=activation, normalization=normalization, optimization=optimization, isoutput=isoutput,
-                adj=adj, h=h, w=w, outch=outch, f_h=f_h, f_w=f_w, inch=inch, padrule=padrule)
+        adj=adj, outch=outch, f_h=f_h, f_w=f_w, padrule=padrule)
 end
 
-function linearlayerspec(; name::Symbol, activation::Symbol=:relu, normalization::Symbol=:none, optimization::Symbol=:none, 
-        isoutput=false, adj::ELT=ELT(0.002), output::Int64)
-    LayerSpec(name=name, kind=:linear, isoutput=isoutput, activation=activation, normalization=normalization, optimization=optimization, adj=adj, h=output)
+function linearlayerspec(; name::Symbol, activation::Symbol=:relu, normalization::Symbol=:none, optimization::Symbol=:none,
+    isoutput=false, adj::ELT=ELT(0.002), outputdim::Int64)
+    LayerSpec(name=name, kind=:linear, isoutput=isoutput, activation=activation, normalization=normalization, optimization=optimization, adj=adj, outputdim=outputdim)
 end
 
 function maxpoollayerspec(; name::Symbol, f_h::Int, f_w::Int)
@@ -72,16 +72,16 @@ end
     inputlayerspec(name=:input_image, h=28, w=28, outch=1)
 Supply inputs for h, w,and outch for an input array that is an image stack with dimensions of h, w, outch, batchsize.
 
-    inputlayerspec(name=:input_array, output=15)
+    inputlayerspec(name=:input_array, outputdim=15)
 Or supply only an input for the output parameter for a dense linear input array of dimensions output, batchsize.
 
 For both array inputs, the batchsize will be determined from the actual array provided as x input to function trainloop!.
 """
-function inputlayerspec(; name::Symbol, h::Int64=0, w::Int64=0, outch::Int64=0, output::Int64=0)
-    if (h>0) & (w>0) & (outch>0) 
+function inputlayerspec(; name::Symbol, h::Int64=0, w::Int64=0, outch::Int64=0, outputdim::Int64=0)
+    if (h > 0) & (w > 0) & (outch > 0)
         LayerSpec(name=name, kind=:input, h=h, w=w, outch=outch)
-    elseif output > 0
-        LayerSpec(name=name, kind=:input, h=output)
+    elseif outputdim > 0
+        LayerSpec(name=name, kind=:input, outputdim=outputdim)
     else
         error("Positive integer inputs must be supplied for h, w, AND outch OR only for output.")
     end
@@ -89,7 +89,7 @@ end
 
 
 """
-    outputlayerspec(; name::Symbol, activation::Symbol, optimization::Symbol=:none, output::Int64)
+    outputlayerspec(; name::Symbol, activation::Symbol, optimization::Symbol=:none, outputdim::Int64)
 
 Create a LayerSpec for an output layer with specified activation function.
 
@@ -97,39 +97,39 @@ Create a LayerSpec for an output layer with specified activation function.
 - `name::Symbol`: Name of the output layer
 - `activation::Symbol`: Output activation function - must be one of `:softmax`, `:logistic`, or `:regression`
 - `optimization::Symbol=:none`: Optimization method (`:none`, `:adam`, or `:adamw`)
-- `output::Int64`: Number of output units
+- `outputdim::Int64`: Number of output units
 
 # Examples
 ```julia
 # For multiclass classification (10 classes)
-outputlayerspec(name=:output, activation=:softmax, output=10)
+outputlayerspec(name=:output, activation=:softmax, outputdim=10)
 
-# For binary classification  
-outputlayerspec(name=:output, activation=:logistic, output=1)
+# For binary classification
+outputlayerspec(name=:output, activation=:logistic, outputdim=1)
 
 # For regression
-outputlayerspec(name=:output, activation=:regression, output=1)
+outputlayerspec(name=:output, activation=:regression, outputdim=1)
 
 # With optimization
-outputlayerspec(name=:output, activation=:softmax, optimization=:adam, output=10)
+outputlayerspec(name=:output, activation=:softmax, optimization=:adam, outputdim=10)
 ```
 """
-function outputlayerspec(; name::Symbol, activation::Symbol, optimization::Symbol=:none, output::Int64)
-    
+function outputlayerspec(; name::Symbol, activation::Symbol, optimization::Symbol=:none, outputdim::Int64)
+
     # Validate that the activation function is appropriate for output layers
     if !in(activation, [:softmax, :logistic, :regression])
         error("Output layer activation must be one of :softmax, :logistic, :regression. Input was :$activation")
     end
-    
+
     # Validate that output is positive
-    if output <= 0
-        error("Output layer must have at least 1 output unit. Input was $output")
+    if outputdim <= 0
+        error("Output layer must have at least 1 output unit. Input was $outputdim")
     end
-    
+
     # Create LayerSpec - output layers are essentially linear layers with specific activations
     # normalization defaults to :none and should not be specified for output layers
     LayerSpec(name=name, kind=:linear, activation=activation, isoutput=true,
-                optimization=optimization, h=output)
+        optimization=optimization, outputdim=outputdim)
 end
 
 # ============================
@@ -137,7 +137,7 @@ end
 # ============================
 
 
-Base.@kwdef struct ConvLayer <: Layer  
+Base.@kwdef struct ConvLayer <: Layer
     # data arrays
     z::Array{ELT,4}  # = ELT[;;;;]
     z_norm::Array{ELT,4}  # = ELT[;;;;]  # if doing batchnorm: 2d to simplify batchnorm calcs
@@ -156,7 +156,7 @@ Base.@kwdef struct ConvLayer <: Layer
     grad_bias::Vector{ELT}  # = ELT[]
 
     # cache arrays for optimization (only initialize and allocate if using)
-    grad_m_weight::Array{ELT, 4}
+    grad_m_weight::Array{ELT,4}
     grad_m_bias::Vector{ELT}
     grad_v_weight::Array{ELT,4}
     grad_v_bias::Vector{ELT}
@@ -172,12 +172,12 @@ Base.@kwdef struct ConvLayer <: Layer
     optparams::OptParam
 
     # scalar parameters
-    name::Symbol  
-    optimization::Symbol  
-    adj::ELT  
+    name::Symbol
+    optimization::Symbol
+    adj::ELT
     padrule::Symbol  # can be :same or :none
-    stride::Int64  
-    dobias::Bool  
+    stride::Int64
+    dobias::Bool
     isoutput::Bool
 end
 
@@ -191,56 +191,56 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
     out_h = div((prev_h + 2pad - lr.f_h), lr.stride) + 1
     out_w = div((prev_w + 2pad - lr.f_w), lr.stride) + 1
     if lr.normalization == :batchnorm
-            normalizationf = batchnorm!
-            normalization_gradf = batchnorm_grad!
-            normparams = BatchNorm{Vector{ELT}}(gam=ones(ELT, outch), bet=zeros(ELT, outch),
-                grad_gam=zeros(ELT, outch), grad_bet=zeros(ELT, outch),
-                grad_m_gam=zeros(ELT, outch), grad_v_gam=zeros(ELT, outch),
-                grad_m_bet=zeros(ELT, outch), grad_v_bet=zeros(ELT, outch),
-                mu=zeros(ELT, outch), stddev=zeros(ELT, outch),
-                mu_run=zeros(ELT, outch), std_run=zeros(ELT, outch))
-            dobias = false
-        elseif lr.normalization == :none
-            normalizationf = noop
-            normalization_gradf = noop
-            normparams = NoNorm() # initialize as empty struct of different type
-            dobias = true
-        else
-            error("Only :batchnorm and :none  supported, not $(Symbol(lr.normalization)).")
-        end
+        normalizationf = batchnorm!
+        normalization_gradf = batchnorm_grad!
+        normparams = BatchNorm{Vector{ELT}}(gam=ones(ELT, outch), bet=zeros(ELT, outch),
+            grad_gam=zeros(ELT, outch), grad_bet=zeros(ELT, outch),
+            grad_m_gam=zeros(ELT, outch), grad_v_gam=zeros(ELT, outch),
+            grad_m_bet=zeros(ELT, outch), grad_v_bet=zeros(ELT, outch),
+            mu=zeros(ELT, outch), stddev=zeros(ELT, outch),
+            mu_run=zeros(ELT, outch), std_run=zeros(ELT, outch))
+        dobias = false
+    elseif lr.normalization == :none
+        normalizationf = noop
+        normalization_gradf = noop
+        normparams = NoNorm() # initialize as empty struct of different type
+        dobias = true
+    else
+        error("Only :batchnorm and :none  supported, not $(Symbol(lr.normalization)).")
+    end
 
-        if lr.activation == :relu
-            activationf=relu!
-        elseif lr.activation == :leaky_relu
-            activationf=leaky_relu!
-        elseif lr.activation == :none
-            activationf=noop
-        else
-            error("Only :relu, :leaky_relu and :none  supported, not $(Symbol(lr.activation)).")
-        end
+    if lr.activation == :relu
+        activationf = relu!
+    elseif lr.activation == :leaky_relu
+        activationf = leaky_relu!
+    elseif lr.activation == :none
+        activationf = noop
+    else
+        error("Only :relu, :leaky_relu and :none  supported, not $(Symbol(lr.activation)).")
+    end
 
-        if lr.activation == :relu
-            activation_gradf=relu_grad!
-        elseif lr.activation == :leaky_relu
-            activation_gradf=leaky_relu_grad!
-        elseif lr.activation == :none
-            activation_gradf=noop
-        else
-            error("Only :relu, :leaky_relu and :none  supported, not $(Symbol(lr.activation)).")
-        end
+    if lr.activation == :relu
+        activation_gradf = relu_grad!
+    elseif lr.activation == :leaky_relu
+        activation_gradf = leaky_relu_grad!
+    elseif lr.activation == :none
+        activation_gradf = noop
+    else
+        error("Only :relu, :leaky_relu and :none  supported, not $(Symbol(lr.activation)).")
+    end
 
-        if (lr.optimization == :adam) | (lr.optimization == :adamw)
-            optparams = AdamParam(b1=0.9, b2=0.999, decay=0.01)
-        elseif lr.optimization == :none
-            optparams = NoOpt()
-        else
-            error("Only :none, :adam or :adamw supported, not $(Symbol(lr.optimization)).")
-        end
+    if (lr.optimization == :adam) | (lr.optimization == :adamw)
+        optparams = AdamParam(b1=0.9, b2=0.999, decay=0.01)
+    elseif lr.optimization == :none
+        optparams = NoOpt()
+    else
+        error("Only :none, :adam or :adamw supported, not $(Symbol(lr.optimization)).")
+    end
 
     ConvLayer(
         # data arrays
         pad_x=zeros(ELT, out_h + 2pad, out_w + 2pad, inch, n_samples),
-        a_below = zeros(ELT, prev_h, prev_w, inch, n_samples),
+        a_below=zeros(ELT, prev_h, prev_w, inch, n_samples),
         pad_a_below=zeros(ELT, prev_h + 2pad, prev_w + 2pad, inch, n_samples),
         z=zeros(ELT, out_h, out_w, outch, n_samples),
         z_norm=ifelse(lr.normalization == :batchnorm, zeros(ELT, out_h, out_w, outch, n_samples), zeros(ELT, 0, 0, 0, 0)),
@@ -250,24 +250,24 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
         pad_next_eps=zeros(ELT, prev_h, prev_w, outch, n_samples),
 
         # weight arrays
-        weight=he_initialize((lr.f_h, lr.f_w, inch, lr.outch), scale=2.2, adj=lr.adj),
+        weight=he_initialize((lr.f_h, lr.f_w, inch, outch), scale=2.2, adj=lr.adj),
         bias=zeros(ELT, outch),
         grad_weight=zeros(ELT, lr.f_h, lr.f_w, inch, outch),
         grad_bias=zeros(ELT, outch),
 
         # cache arrays for optimization (only initialize and allocate if using)
-        grad_m_weight = ifelse(isa(optparams,AdamParam),zeros(ELT, lr.f_h, lr.f_w, inch, lr.outch),zeros(ELT, 0,0,0,0)),
-        grad_m_bias = ifelse(isa(optparams,AdamParam),zeros(ELT, outch),zeros(ELT, 0)),
-        grad_v_weight = ifelse(isa(optparams,AdamParam),zeros(ELT, lr.f_h, lr.f_w, inch, lr.outch),zeros(ELT, 0,0,0,0)),
-        grad_v_bias = ifelse(isa(optparams,AdamParam),zeros(ELT, outch),zeros(ELT, 0)),
+        grad_m_weight=ifelse(isa(optparams, AdamParam), zeros(ELT, lr.f_h, lr.f_w, inch, lr.outch), zeros(ELT, 0, 0, 0, 0)),
+        grad_m_bias=ifelse(isa(optparams, AdamParam), zeros(ELT, outch), zeros(ELT, 0)),
+        grad_v_weight=ifelse(isa(optparams, AdamParam), zeros(ELT, lr.f_h, lr.f_w, inch, lr.outch), zeros(ELT, 0, 0, 0, 0)),
+        grad_v_bias=ifelse(isa(optparams, AdamParam), zeros(ELT, outch), zeros(ELT, 0)),
 
         # structs of layer specific parameters
-        normparams = normparams,
-        optparams = optparams,
+        normparams=normparams,
+        optparams=optparams,
 
         # layer specific functions
-        activationf = activationf,
-        activation_gradf = activation_gradf,
+        activationf=activationf,
+        activation_gradf=activation_gradf,
         normalizationf=normalizationf,
         normalization_gradf=normalization_gradf,
 
@@ -299,7 +299,7 @@ Base.@kwdef struct LinearLayer <: Layer
     grad_bias::Vector{ELT}  #   = ELT[]
 
     # cache arrays for optimization (only initialize and allocate if using)
-    grad_m_weight::Array{ELT, 2}
+    grad_m_weight::Array{ELT,2}
     grad_m_bias::Vector{ELT}
     grad_v_weight::Array{ELT,2}
     grad_v_bias::Vector{ELT}
@@ -315,102 +315,102 @@ Base.@kwdef struct LinearLayer <: Layer
     normalization_gradf::Function
 
     # scalar parameters
-    name::Symbol      
-    optimization::Symbol     
-    adj::ELT   
-    dobias::Bool    
+    name::Symbol
+    optimization::Symbol
+    adj::ELT
+    dobias::Bool
     isoutput::Bool   # is this the output layer?
 end
 
 # this method assigns every field with default initialization or values based on layerspec inputs
 function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
-    outputs = lr.h        # rows
+    outputdim = lr.outputdim      # rows
     inputs = size(prevlayer.a, 1)    # rows of lower layer output become columns
 
     if lr.normalization == :batchnorm
-            normalizationf = batchnorm!
-            normalization_gradf = batchnorm_grad!
-            normparams=BatchNorm{Vector{ELT}}(gam=ones(ELT, outputs), bet=zeros(ELT, outputs),
-                grad_gam=zeros(ELT, outputs), grad_bet=zeros(ELT, outputs),
-                grad_m_gam=zeros(ELT, outputs), grad_v_gam=zeros(ELT, outputs),
-                grad_m_bet=zeros(ELT, outputs), grad_v_bet=zeros(ELT, outputs),
-                mu=zeros(ELT, outputs), stddev=zeros(ELT, outputs),
-                mu_run=zeros(ELT, outputs), std_run=zeros(ELT, outputs))
-            dobias = false
-        elseif lr.normalization == :none
-            normalizationf = noop
-            normalization_gradf = noop
-            normparams = NoNorm()  # initialize as empty struct of different type
-            dobias = true
-        else
-            error("Only :batchnorm and :none  supported, not $(Symbol(lr.normalization)).")
-        end
+        normalizationf = batchnorm!
+        normalization_gradf = batchnorm_grad!
+        normparams = BatchNorm{Vector{ELT}}(gam=ones(ELT, outputdim), bet=zeros(ELT, outputdim),
+            grad_gam=zeros(ELT, outputdim), grad_bet=zeros(ELT, outputdim),
+            grad_m_gam=zeros(ELT, outputdim), grad_v_gam=zeros(ELT, outputdim),
+            grad_m_bet=zeros(ELT, outputdim), grad_v_bet=zeros(ELT, outputdim),
+            mu=zeros(ELT, outputdim), stddev=zeros(ELT, outputdim),
+            mu_run=zeros(ELT, outputdim), std_run=zeros(ELT, outputdim))
+        dobias = false
+    elseif lr.normalization == :none
+        normalizationf = noop
+        normalization_gradf = noop
+        normparams = NoNorm()  # initialize as empty struct of different type
+        dobias = true
+    else
+        error("Only :batchnorm and :none  supported, not $(Symbol(lr.normalization)).")
+    end
 
-        if lr.activation == :relu
-            activationf=relu!
-        elseif lr.activation == :leaky_relu
-            activationf=leaky_relu!
-        elseif lr.activation == :none
-            activationf=noop
-        elseif lr.activation == :softmax
-            activationf=softmax!
-        elseif lr.activation == :logistic   # rarely used any more
-            activationf=logistic!
-        elseif lr.activation == :regression
-            activationf=regression!
-        else
-            error("Only :relu, :leaky_relu, :softmax and :none  supported, not $(Symbol(lr.activation)).")
-        end
+    if lr.activation == :relu
+        activationf = relu!
+    elseif lr.activation == :leaky_relu
+        activationf = leaky_relu!
+    elseif lr.activation == :none
+        activationf = noop
+    elseif lr.activation == :softmax
+        activationf = softmax!
+    elseif lr.activation == :logistic   # rarely used any more
+        activationf = logistic!
+    elseif lr.activation == :regression
+        activationf = regression!
+    else
+        error("Only :relu, :leaky_relu, :softmax and :none  supported, not $(Symbol(lr.activation)).")
+    end
 
-        if lr.activation == :relu  # this has no effect on the output layer, but need it for hidden layers
-            activation_gradf=relu_grad!
-        elseif lr.activation == :leaky_relu
-            activation_gradf=leaky_relu_grad!
-        elseif lr.activation == :softmax
-            activation_gradf=noop
-        elseif lr.activation == :none
-            activation_gradf=noop
-        else
-            error("Only :relu, :leaky_relu, :softmax and :none  supported, not $(Symbol(lr.activation)).")
-        end
+    if lr.activation == :relu  # this has no effect on the output layer, but need it for hidden layers
+        activation_gradf = relu_grad!
+    elseif lr.activation == :leaky_relu
+        activation_gradf = leaky_relu_grad!
+    elseif lr.activation == :softmax
+        activation_gradf = noop
+    elseif lr.activation == :none
+        activation_gradf = noop
+    else
+        error("Only :relu, :leaky_relu, :softmax and :none  supported, not $(Symbol(lr.activation)).")
+    end
 
-        if (lr.optimization == :adam) | (lr.optimization == :adamw)
-            optparams = AdamParam(b1=0.9, b2=0.999, decay=0.01)
-            optimization = lr.optimization
-        elseif lr.optimization == :none
-            optparams = NoOpt()
-        else
-            error("Only :none, :adam or :adamw supported, not $(Symbol(lr.optimization)).")
-        end
+    if (lr.optimization == :adam) | (lr.optimization == :adamw)
+        optparams = AdamParam(b1=0.9, b2=0.999, decay=0.01)
+        optimization = lr.optimization
+    elseif lr.optimization == :none
+        optparams = NoOpt()
+    else
+        error("Only :none, :adam or :adamw supported, not $(Symbol(lr.optimization)).")
+    end
 
     LinearLayer(
         # data arrays
-        z=zeros(ELT, outputs, n_samples),
-        z_norm=ifelse(lr.normalization == :batchnorm, zeros(ELT, outputs, n_samples), zeros(ELT, 0, 0)),
-        a=zeros(ELT, outputs, n_samples),
-        a_below = zeros(ELT, inputs, n_samples),
-        eps_l=zeros(ELT, outputs, n_samples),
-        grad_a=zeros(ELT, outputs, n_samples),
+        z=zeros(ELT, outputdim, n_samples),
+        z_norm=ifelse(lr.normalization == :batchnorm, zeros(ELT, outputdim, n_samples), zeros(ELT, 0, 0)),
+        a=zeros(ELT, outputdim, n_samples),
+        a_below=zeros(ELT, inputs, n_samples),
+        eps_l=zeros(ELT, outputdim, n_samples),
+        grad_a=zeros(ELT, outputdim, n_samples),
 
         # weight arrays
-        weight=he_initialize((outputs, inputs), scale=1.5, adj=lr.adj),
-        bias=zeros(ELT, outputs),
-        grad_weight=zeros(outputs, inputs),
-        grad_bias=zeros(ELT, outputs),
+        weight=he_initialize((outputdim, inputs), scale=1.5, adj=lr.adj),
+        bias=zeros(ELT, outputdim),
+        grad_weight=zeros(outputdim, inputs),
+        grad_bias=zeros(ELT, outputdim),
 
         # cache arrays for optimization (only initialize and allocate if using)
-        grad_m_weight = ifelse(isa(optparams,AdamParam),zeros(outputs, inputs),zeros(ELT, 0,0)),
-        grad_m_bias = ifelse(isa(optparams,AdamParam),zeros(ELT, outputs),zeros(ELT, 0)),
-        grad_v_weight = ifelse(isa(optparams,AdamParam),zeros(ELT, outputs, inputs),zeros(ELT, 0,0)),
-        grad_v_bias = ifelse(isa(optparams,AdamParam),zeros(ELT, outputs),zeros(ELT, 0)),
+        grad_m_weight=ifelse(isa(optparams, AdamParam), zeros(outputdim, inputs), zeros(ELT, 0, 0)),
+        grad_m_bias=ifelse(isa(optparams, AdamParam), zeros(ELT, outputdim), zeros(ELT, 0)),
+        grad_v_weight=ifelse(isa(optparams, AdamParam), zeros(ELT, outputdim, inputs), zeros(ELT, 0, 0)),
+        grad_v_bias=ifelse(isa(optparams, AdamParam), zeros(ELT, outputdim), zeros(ELT, 0)),
 
         # structs of layer specific parameters
-        normparams = normparams,
-        optparams = optparams,
+        normparams=normparams,
+        optparams=optparams,
 
         # layer specific functions
-        activationf = activationf,
-        activation_gradf = activation_gradf,
+        activationf=activationf,
+        activation_gradf=activation_gradf,
         normalizationf=normalizationf,
         normalization_gradf=normalization_gradf,
 
@@ -426,7 +426,7 @@ end
 # no weight, bias, gradients, activation
 Base.@kwdef struct FlattenLayer <: Layer
     name::Symbol = :noname
-    output_dim::Int64 = 0
+    outputdim::Int64   # must supply input value in constructor
     dl_dflat::Array{ELT,2} = ELT[;;]
     a::Array{ELT,2} = ELT[;;]
     eps_l::Array{ELT,4} = ELT[;;;;]
@@ -436,13 +436,13 @@ end
 # constructor method to prepare inputs and create layer
 function FlattenLayer(lr::LayerSpec, prevlayer, n_samples)
     h, w, ch, _ = size(prevlayer.a)
-    output_dim = h * w * ch
+    outputdim = h * w * ch
 
     FlattenLayer(
         name=lr.name,
-        output_dim=output_dim,
-        a=zeros(ELT, output_dim, n_samples),
-        dl_dflat=zeros(ELT, output_dim, n_samples),
+        outputdim=outputdim,
+        a=zeros(ELT, outputdim, n_samples),
+        dl_dflat=zeros(ELT, outputdim, n_samples),
         eps_l=zeros(ELT, h, w, ch, n_samples),
         isoutput=lr.isoutput
     )
@@ -450,13 +450,25 @@ end
 
 Base.@kwdef struct InputLayer <: Layer     # we only have this to simplify feedforward loop
     name::Symbol = :noname
-    kind::Symbol = :image   # other allowed value is :linear
+    kind::Symbol   # must supply input value in constructor
     out_h::Int64 = 0
     out_w::Int64 = 0
     outch::Int64 = 0
+    outputdim::Int64 = 0
     a::Array{ELT}   # no default provided because dims different for :image vs :linear
 end
 
+function InputLayer(lr::LayerSpec, n_samples)
+    if lr.outputdim > 0  # dense input layer
+        InputLayer(name=lr.name, kind=:linear,
+            outputdim=lr.outputdim,
+            a=zeros(ELT, lr.outputdim, n_samples))
+    elseif lr.outch > 0  # image input layer
+        InputLayer(name=lr.name, kind=:image,
+            out_h=lr.h, out_w=lr.w, outch=lr.outch,
+            a=zeros(ELT, lr.h, lr.w,  lr.outch, n_samples))
+    end
+end
 
 Base.@kwdef struct MaxPoolLayer <: Layer
     name::Symbol = :noname

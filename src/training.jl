@@ -56,7 +56,7 @@ function show_array_sizes(layer)
     for p in fieldnames(typeof(layer))
         val = getfield(layer, p)
         if isa(val, AbstractArray)
-            println(p,": ",size(val))
+            println(p, ": ", size(val))
         end
     end
 end
@@ -67,8 +67,8 @@ function show_functions(layer)
         val = getfield(layer, p)
         if isa(val, Function)
             first && println("functions:")
-            println(p, ": ",val, " ",typeof(val))
-            first=false
+            println(p, ": ", val, " ", typeof(val))
+            first = false
         end
     end
 end
@@ -113,14 +113,7 @@ function allocate_layers(lsvec::Vector{LayerSpec}, n_samples)
                 error("First layer must be the input layer.")
             else
                 push!(layerdat,
-                    InputLayer(
-                        name=lr.name,
-                        kind=lr.kind,
-                        out_h=lr.h,
-                        out_w=lr.w,
-                        outch=lr.outch,
-                        a=zeros(ELT, lr.h, lr.w, lr.outch, n_samples),
-                    ))
+                    InputLayer(lr, n_samples))
             end
             continue  # skip the ifs and go to next lr
         elseif lr.kind == :conv
@@ -179,7 +172,7 @@ end
 function find_max_idx(arr::AbstractVector)
     max_idx = 1
     max_val = arr[1]
-    @inbounds for i in (first(axes(arr,1))+1):last(axes(arr,1))
+    @inbounds for i in (first(axes(arr, 1))+1):last(axes(arr, 1))
         if arr[i] > max_val
             max_val = arr[i]
             max_idx = i
@@ -189,11 +182,11 @@ function find_max_idx(arr::AbstractVector)
 end
 
 function accuracy_count(preds, targets)
-    (correct_count, total_samples) =_accuracy_base(preds, targets, true)
+    (correct_count, total_samples) = _accuracy_base(preds, targets, true)
 end
 
 function accuracy(preds, targets)
-    (correct_count, total_samples) =_accuracy_base(preds, targets)
+    (correct_count, total_samples) = _accuracy_base(preds, targets)
     correct_count / total_samples
 end
 
@@ -205,16 +198,16 @@ function _accuracy_base(preds, targets, onlycount=false)
         total_samples = size(preds, 2)  # Assuming column-major layout (examples are columns; rows are features of an example)
 
         @inbounds for sample in 1:total_samples
-            @views target_max_idx = find_max_idx(targets[:,sample])
+            @views target_max_idx = find_max_idx(targets[:, sample])
 
-            @views pred_max_idx = find_max_idx(preds[:,sample])
+            @views pred_max_idx = find_max_idx(preds[:, sample])
 
             if pred_max_idx == target_max_idx
                 correct_count += 1
             end
         end
         return correct_count, total_samples
-        
+
     else
         # Binary classification
         correct_count = 0
@@ -256,7 +249,7 @@ end
 function mse_cost(targets, predictions, n, theta=[], lambda=ELT(1.0), reg="", output_layer=3)
     @fastmath cost = (ELT(1.0) / (ELT(2.0) * n)) .* sum((targets .- predictions) .^ ELT(2.0))
     @fastmath if reg == "L2"  # set reg="" if not using regularization
-        regterm = lambda/(ELT(2.0) * n) .* sum([dot(th, th) for th in theta[2:output_layer]])
+        regterm = lambda / (ELT(2.0) * n) .* sum([dot(th, th) for th in theta[2:output_layer]])
         cost = cost + regterm
     end
     return cost
@@ -282,7 +275,7 @@ function backprop!(layers::Vector{<:Layer}, y)
 
     # skip over output layer (end) and input layer (begin)
     nlayers = length(layers)
-    @inbounds @views for (i, lr) in zip((nlayers-1):-1:2 , reverse(layers[begin+1:end-1]))
+    @inbounds @views for (i, lr) in zip((nlayers-1):-1:2, reverse(layers[begin+1:end-1]))
         lr(layers[i+1])
     end
     return
@@ -305,10 +298,10 @@ function update_batchnorm!(layer, hp, t)
         @turbo for i in eachindex(bn.gam)
             adam_term_gam = (bn.grad_m_gam[i] * b1_divisor) / (sqrt(bn.grad_v_gam[i] * b2_divisor) + IT)
             bn.gam[i] -= hp.lr * adam_term_gam
-        # end
+            # end
 
-        # Update beta (shift) parameter - no weight decay for batch norm
-        # @turbo for i in eachindex(bn.bet)
+            # Update beta (shift) parameter - no weight decay for batch norm
+            # @turbo for i in eachindex(bn.bet)
             adam_term_bet = (bn.grad_m_bet[i] * b1_divisor) / (sqrt(bn.grad_v_bet[i] * b2_divisor) + IT)
             bn.bet[i] -= hp.lr * adam_term_bet
         end
@@ -367,7 +360,7 @@ function update_weights!(layer::Layer, hp, t)
         if isa(layer.normparams, BatchNorm)
             bn = layer.normparams
             pre_adam_batchnorm!(bn, ad, t)
-            
+
             # Update gamma (scale) parameter and beta (shift parameter)
             @turbo for i in eachindex(bn.gam)
                 adam_term_gam = (bn.grad_m_gam[i] * b1_divisor) / (sqrt(bn.grad_v_gam[i] * b2_divisor) + IT)
@@ -416,12 +409,12 @@ function update_weight_loop!(layers::Vector{<:Layer}, hp, counter)
         if isa(lr, FlattenLayer) || isa(lr, MaxPoolLayer)
             continue  # skip non-parametric layers
         end
-        
+
         update_weights!(lr, hp, counter)
     end
 end
 
-function train!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size=0, hp=default_hp) where L <: Layer
+function train!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size=0, hp=default_hp) where {L<:Layer}
 
     # setup minibatches
     if minibatch_size == 0
@@ -466,7 +459,7 @@ function train!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size=0, h
 
             update_weight_loop!(layers, hp, counter)
 
-            hp.do_stats  && gather_stats!(stats, layers, y_part, counter, batno, e; to_console=false)
+            hp.do_stats && gather_stats!(stats, layers, y_part, counter, batno, e; to_console=false)
 
         end
     end
@@ -499,9 +492,9 @@ function plot_stats(stats)
     plot!(twinx(), stats.loss, label="Cost", ylabel="Loss", color=:red)
 end
 
-function minibatch_prediction(layers::Vector{Layer}, x, y, costfunc = cross_entropy_cost)
-    (out,full_batch) = size(y)
-    minibatch_size = size(layers[end].a,2)
+function minibatch_prediction(layers::Vector{Layer}, x, y, costfunc=cross_entropy_cost)
+    (out, full_batch) = size(y)
+    minibatch_size = size(layers[end].a, 2)
 
     # setup minibatches
     if minibatch_size == 0
@@ -548,7 +541,7 @@ function minibatch_prediction(layers::Vector{Layer}, x, y, costfunc = cross_entr
         total_cost += cost
     end
 
-    return total_correct/total_cnt, total_cost/mini_num
+    return total_correct / total_cnt, total_cost / mini_num
 end
 
 function prediction(predlayers::Vector{<:Layer}, x_input, y_input)

@@ -45,10 +45,10 @@ function (layer::ConvLayer)(x::AbstractArray{ELT,4})
     # initialize output z with 0.0f0 if nobias or with bias: when dobias==false, layer.bias remains as initialized to zeros
     if layer.dobias
         for oc in axes(layer.z, 3)
-            @turbo @views layer.z[:, :, oc, :] .= layer.bias[oc]
+            @turbo layer.z[:, :, oc, :] .= layer.bias[oc]  # appropriate bias inserted in each element
         end
     else
-        fill!(layer.z, ELT(0.0))
+        fill!(layer.z, ELT(0.0))  # all initialized to zero, 1/2x time of inserting bias
     end
 
     # Combine bias initialization with convolution in a single pass
@@ -320,7 +320,6 @@ function (layer::FlattenLayer)(x::AbstractArray{ELT,4})
 end
 
 
-# functor-style call for back propagation
 """
     (layer::FlattenLayer)(layer_above::LinearLayer)
 

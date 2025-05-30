@@ -27,6 +27,7 @@ include("mnist_fun.jl")
 
 # data structures for neural network
 export
+    InputLayer,
     ConvLayer,
     LinearLayer,
     FlattenLayer,

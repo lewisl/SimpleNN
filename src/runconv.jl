@@ -1,3 +1,11 @@
+# %% startup
+
+cd(joinpath(homedir(), "code", "SimpleNN"))
+using Pkg
+Pkg.activate(".")
+Pkg.instantiate()
+
+
 # script for running and testing different network structures
 # %% packages and inputs
 
@@ -18,37 +26,37 @@ one_conv = LayerSpec[
     convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, normalization=:batchnorm, optimization=:adamw)  # , normalization=:batchnorm  , optimization=:adamw
     maxpoollayerspec(name=:maxpool1, f_h=2, f_w=2)
     flattenlayerspec(name=:flatten)
-    linearlayerspec(output=200, activation=:relu, name=:linear1, normalization=:batchnorm, optimization=:adamw)
-    outputlayerspec(output=10, activation=:softmax, name=:output)
+    linearlayerspec(outputdim=200, activation=:relu, name=:linear1, normalization=:batchnorm, optimization=:adamw)
+    outputlayerspec(outputdim=10, activation=:softmax, name=:output)
 ];
 
 
 two_conv = LayerSpec[
     inputlayerspec(name=:input, h=28, w=28, outch=1)
-    convlayerspec(name=:conv1, outch=32, f_h=3, f_w=3, activation=:relu,normalization=:batchnorm, optimization=:adam)
+    convlayerspec(name=:conv1, outch=32, f_h=3, f_w=3, activation=:relu, normalization=:batchnorm, optimization=:adam)
     # maxpoollayerspec(name=:maxpool1, f_h=2, f_w=2)
-    convlayerspec(name=:conv2, outch=16, f_h=3, f_w=3, activation=:relu,normalization=:batchnorm, optimization=:adam)
+    convlayerspec(name=:conv2, outch=16, f_h=3, f_w=3, activation=:relu, normalization=:batchnorm, optimization=:adam)
     maxpoollayerspec(name=:maxpool2, f_h=2, f_w=2)
     flattenlayerspec(name=:flatten)
-    linearlayerspec(name=:linear1, output=200,normalization=:batchnorm, optimization=:adam)
-    outputlayerspec(output=10, activation=:softmax, name=:output)
+    linearlayerspec(name=:linear1, outputdim=200, normalization=:batchnorm, optimization=:adam)
+    outputlayerspec(outputdim=10, activation=:softmax, name=:output)
 ];
 
 two_linear = LayerSpec[
     inputlayerspec(h=28, w=28, outch=1, name=:input)
     flattenlayerspec(name=:flatten)
-    linearlayerspec(name=:linear1, output=256, normalization=:batchnorm,  optimization=:adam)   # normalization=:batchnorm
-    linearlayerspec(name=:linear2, output=256, normalization=:batchnorm,  optimization=:adam)
-    outputlayerspec(output=10, activation=:softmax, name=:output)
+    linearlayerspec(name=:linear1, outputdim=256, normalization=:batchnorm, optimization=:adam)   # normalization=:batchnorm
+    linearlayerspec(name=:linear2, outputdim=256, normalization=:batchnorm, optimization=:adam)
+    outputlayerspec(outputdim=10, activation=:softmax, name=:output)
 ];
 
 three_linear = LayerSpec[
-    inputlayerspec(h=28, w=28, outch=1,  name=:input)
+    inputlayerspec(h=28, w=28, outch=1, name=:input)
     flattenlayerspec(name=:flatten)
-    linearlayerspec(name=:linear1, output=300, normalization=:batchnorm)
-    linearlayerspec(name=:linear2, output=300, normalization=:batchnorm)
-    linearlayerspec(name=:linear3, output=300, normalization=:batchnorm)
-    outputlayerspec(output=10, activation=:softmax, name=:output)
+    linearlayerspec(name=:linear1, outputdim=300, normalization=:batchnorm)
+    linearlayerspec(name=:linear2, outputdim=300, normalization=:batchnorm)
+    linearlayerspec(name=:linear3, outputdim=300, normalization=:batchnorm)
+    outputlayerspec(outputdim=10, activation=:softmax, name=:output)
 ];
 
 # %%   some hyperparameters
@@ -65,10 +73,10 @@ hp = HyperParameters(lr=ELT(0.001), reg=:L2, regparm=ELT(0.00043), do_stats=fals
 layers = setup_train(layerspecs, minibatch_size);
 
 if !preptest
-    x_train, y_train = setup_mnist(full_batch, preptest);
+    x_train, y_train = setup_mnist(full_batch, preptest)
 else
-    x_train, y_train, x_test, y_test = setup_mnist(full_batch, preptest);
-    testsize = size(y_test, 2);
+    x_train, y_train, x_test, y_test = setup_mnist(full_batch, preptest)
+    testsize = size(y_test, 2)
 end;
 
 
@@ -99,7 +107,7 @@ prediction(predlayerstestfull, x_test, y_test)
 
 # %% predict a single example
 
-samplenumber = 20;
+samplenumber = 200;
 
 pred1layers = setup_preds(layerspecs, layers, 1);
 
