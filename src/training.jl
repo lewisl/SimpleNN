@@ -132,12 +132,12 @@ function allocate_layers(lsvec::Vector{LayerSpec}, n_samples)
     return layerdat
 end
 
-function allocate_stats(batch_size, minibatch_size, epochs)
-    no_of_batches = div(batch_size, minibatch_size)
+function allocate_stats(full_batch, minibatch_size, epochs)
+    no_of_batches = div(full_batch, minibatch_size)
     stats = StatSeries(
         acc=zeros(ELT, no_of_batches * epochs),
         cost=zeros(ELT, no_of_batches * epochs),
-        batch_size=batch_size,
+        batch_size=full_batch,
         epochs=epochs,
         minibatch_size=minibatch_size)
 end
@@ -260,6 +260,9 @@ end
 # ============================
 
 function feedforward!(layers::Vector{<:Layer}, x)
+
+    # @show size(layers[begin].a)
+    # @show size(x)
     layers[begin].a .= x
     @inbounds for (i, lr) in zip(2:length(layers), layers[2:end])  # assumes that layers[1] MUST be input layer without checking!
         # dispatch on type of lr
@@ -414,52 +417,68 @@ function update_weight_loop!(layers::Vector{<:Layer}, hp, counter)
     end
 end
 
+# helpers for minibatch views in training loop
+@inline function slice_minibatch(x::AbstractArray{T,2}, range) where T
+    view(x, :, range)
+end
+
+@inline function slice_minibatch(x::AbstractArray{T,4}, range) where T  
+    view(x, :, :, :, range)
+end
+
+
 function train!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size=0, hp=default_hp) where {L<:Layer}
 
-    # setup minibatches
-    if minibatch_size == 0
-        # setup noop minibatch parameters
-        n_minibatches = 1
-        n_samples = full_batch
-    else
-        if rem(full_batch, minibatch_size) != 0
-            error("minibatch_size does not divide evenly into batch_size")
-        else
-            n_minibatches = div(full_batch, minibatch_size)
-            n_samples = minibatch_size
-        end
-    end
-
-    @show n_minibatches
-    @show n_samples
+    dobatch = if minibatch_size == 0
+                false
+            elseif minibatch_size <= 39
+                error("Minibatch_size too small.  Choose a larger minibatch_size.")
+            elseif full_batch / minibatch_size > 3
+                true
+            else
+                error("Minibatch_size too large with fewer than 3 batches. Choose a much smaller minibatch_size.")
+            end
 
     stats = allocate_stats(full_batch, minibatch_size, epochs)
-    counter = 0
+    batch_counter = 0
 
     for e = 1:epochs
-        @inbounds for batno in 1:n_minibatches
+        samples_left = full_batch
+        start_obs = end_obs = 0
+        loop = true
 
-            if n_minibatches > 1
-                start_obs = (batno - 1) * minibatch_size + 1
-                end_obs = start_obs + minibatch_size - 1
-                x_part = view(x, :, :, :, start_obs:end_obs)
-                y_part = view(y, :, start_obs:end_obs)
+        @inbounds while loop 
+
+            if dobatch
+                if samples_left > minibatch_size  # continue
+                    start_obs = end_obs + 1
+                    end_obs = start_obs + minibatch_size - 1
+                else   # stop after this iteration setting the stop flag
+                    start_obs = end_obs + 1
+                    end_obs = start_obs + samples_left - 1
+                    loop = false
+                end
+                x_part = slice_minibatch(x, start_obs:end_obs)
+                y_part = slice_minibatch(y, start_obs:end_obs)
+                samples_left -= minibatch_size  # update the effective loop counter
             else
                 x_part = x
                 y_part = y
+                loop = false
             end
 
-            counter += 1
+            batch_counter += 1
 
-            print("counter = ", counter, "\r")
+            print("counter = ", batch_counter, "\r")
             flush(stdout)
+
             feedforward!(layers, x_part)
 
             backprop!(layers, y_part)
 
-            update_weight_loop!(layers, hp, counter)
+            update_weight_loop!(layers, hp, batch_counter)
 
-            hp.do_stats && gather_stats!(stats, layers, y_part, counter, batno, e; to_console=false)
+            hp.do_stats && gather_stats!(stats, layers, y_part, batch_counter, batno, e; to_console=false)
 
         end
     end

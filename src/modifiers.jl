@@ -116,8 +116,8 @@ function batchnorm_grad!(layer::ConvLayer)
     (_, _, c, mb) = size(layer.pad_above_eps)
     inverse_mb_size = ELT(1.0) / ELT(mb)
 
-    @show size(layer.z_norm)
-    @show size(layer.pad_above_eps)
+    # @show size(layer.z_norm)
+    # @show size(layer.pad_above_eps)
 
 
     # Compute gradients for beta and gamma

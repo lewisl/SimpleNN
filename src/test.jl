@@ -132,3 +132,68 @@ tst_img = [
     (27,5,1,1)
     (27,5,1,2)
 ]
+
+
+function train!( x, y, full_batch, epochs, minibatch_size=0)   #  where {L<:Layer}   layers::Vector{L};  , hp=default_hp
+
+    dobatch = if minibatch_size == 0
+                false
+            elseif minibatch_size <= 39
+                error("Minibatch_size too small.  Choose a larger minibatch_size.")
+            elseif full_batch / minibatch_size > 3
+                true
+            else
+                error("Minibatch_size too large with fewer than 3 batches. Choose a much smaller minibatch_size.")
+            end
+
+    # @show n_minibatches
+    # @show n_samples
+
+    # stats = allocate_stats(full_batch, minibatch_size, epochs)
+    batch_counter = 0
+
+    for e = 1:epochs
+        println("epoch: ", e)
+
+
+        loop = true
+        samples_left = full_batch
+        start_obs = end_obs = 0
+        @inbounds while loop 
+
+            if dobatch
+                if samples_left > minibatch_size
+                    start_obs = end_obs + 1
+                    end_obs = start_obs + minibatch_size - 1
+                else
+                    start_obs = end_obs + 1
+                    end_obs = start_obs + samples_left - 1
+                    loop = false
+                end
+                x_part = view(x, ndims(x), start_obs:end_obs)
+                y_part = view(y, ndims(y), start_obs:end_obs)
+                samples_left -= minibatch_size
+            else
+                x_part = x
+                y_part = y
+                loop = false
+            end
+
+            batch_counter += 1
+
+            println("    counter = ", batch_counter, " batch size: ", end_obs - start_obs + 1, " start_obs: ", start_obs, " end_obs: ", end_obs, " samples_left: ",samples_left)
+        
+
+            # feedforward!(layers, x_part)
+
+            # backprop!(layers, y_part)
+
+            # update_weight_loop!(layers, hp, batch_counter)
+
+            # hp.do_stats && gather_stats!(stats, layers, y_part, batch_counter, batno, e; to_console=false)
+
+        end
+    end
+
+    return # stats
+end

@@ -75,10 +75,11 @@ preptest = true
 full_batch = 60_000
 minibatch_size = 50
 epochs = 10  # 15 epochs yields near perfect training convergence with dense linear layers
-layerspecs = le_net
+layerspecs = one_conv
 
 # for le_net lr=ELT(0.0003) epochs = 10
-hp = HyperParameters(lr=ELT(0.0003), reg=:L2, regparm=ELT(0.00043), do_stats=false)  # reg=:L2, regparm=0.00043,
+# for one_conv lr=ELT(0.001) epochs = 10
+hp = HyperParameters(lr=ELT(0.001), reg=:L2, regparm=ELT(0.00043), do_stats=false)  # reg=:L2, regparm=0.00043,
 
 # %%
 
