@@ -113,15 +113,18 @@ end
 
 function batchnorm_grad!(layer::ConvLayer)
     bn = layer.normparams
-    (_, _, c, mb) = size(layer.pad_next_eps)
+    (_, _, c, mb) = size(layer.pad_above_eps)
     inverse_mb_size = ELT(1.0) / ELT(mb)
+
+    @show size(layer.z_norm)
+    @show size(layer.pad_above_eps)
 
 
     # Compute gradients for beta and gamma
-    bn.grad_bet .= reshape(sum(layer.pad_next_eps, dims=(1, 2, 4)),c)  .* inverse_mb_size   # ./ mb
-    bn.grad_gam .= reshape(sum(layer.pad_next_eps .* layer.z_norm, dims=(1, 2, 4)), c) .* inverse_mb_size  # ./ mb
+    bn.grad_bet .= reshape(sum(layer.pad_above_eps, dims=(1, 2, 4)),c)  .* inverse_mb_size   # ./ mb
+    bn.grad_gam .= reshape(sum(layer.pad_above_eps .* layer.z_norm, dims=(1, 2, 4)), c) .* inverse_mb_size  # ./ mb
 
-    @inbounds @fastmath for (cidx, ch_z, ch_z_norm) in zip(1:c, eachslice(layer.pad_next_eps, dims=3), eachslice(layer.z_norm,dims=3))
+    @inbounds @fastmath for (cidx, ch_z, ch_z_norm) in zip(1:c, eachslice(layer.pad_above_eps, dims=3), eachslice(layer.z_norm,dims=3))
         # Step 1: Scale by gamma (dELTa_z_norm)
         ch_z .= bn.gam[cidx] .* ch_z
 

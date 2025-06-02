@@ -145,7 +145,7 @@ Base.@kwdef struct ConvLayer <: Layer
     a_below::Array{ELT,4}  # = ELT[;;;;]
     pad_a_below::Array{ELT,4}  # = ELT[;;;;]
     eps_l::Array{ELT,4}  # = ELT[;;;;]
-    pad_next_eps::Array{ELT,4}  # = ELT[;;;;]  # TODO need to test if this is needed given successive conv layer sizes
+    pad_above_eps::Array{ELT,4}  # = ELT[;;;;]  # TODO need to test if this is needed given successive conv layer sizes
     grad_a::Array{ELT,4}  # = ELT[;;;;]
     pad_x::Array{ELT,4}  # = ELT[;;;;]
 
@@ -176,20 +176,28 @@ Base.@kwdef struct ConvLayer <: Layer
     optimization::Symbol
     adj::ELT
     padrule::Symbol  # can be :same or :none
+    pad::Int64
     stride::Int64
     dobias::Bool
     isoutput::Bool
 end
+
+# helper functions for conv layers
+same_pad(imgx,filx,stride) = div((imgx * (stride - 1) - stride + filx), 2)
+dim_out(imgx, filx, stride, pad) = div(imgx - filx + 2pad, stride) + 1
+
 
 # this method assigns every field with default initialization or values based on layerspec inputs
 function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
     outch = lr.outch
     prev_h, prev_w, inch, _ = size(prevlayer.a)
 
-    pad = ifelse(lr.padrule == :same, 1, 0)
+    # TODO: this assumes square images and square filters!  FIX
+    pad = ifelse(lr.padrule == :same, same_pad(prev_h,lr.f_h, lr.stride), 0)  
     # output image dims: calculated once rather than over and over in training loop
-    out_h = div((prev_h + 2pad - lr.f_h), lr.stride) + 1
-    out_w = div((prev_w + 2pad - lr.f_w), lr.stride) + 1
+    out_h = dim_out(prev_h, lr.f_h, lr.stride, pad)
+    out_w = dim_out(prev_w, lr.f_w, lr.stride, pad)
+
     if lr.normalization == :batchnorm
         normalizationf = batchnorm!
         normalization_gradf = batchnorm_grad!
@@ -239,7 +247,7 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
 
     ConvLayer(
         # data arrays
-        pad_x=zeros(ELT, out_h + 2pad, out_w + 2pad, inch, n_samples),
+        pad_x=zeros(ELT, out_h + 2pad, out_w + 2pad, inch, n_samples),  # TODO this isn't right for padrule=:none
         a_below=zeros(ELT, prev_h, prev_w, inch, n_samples),
         pad_a_below=zeros(ELT, prev_h + 2pad, prev_w + 2pad, inch, n_samples),
         z=zeros(ELT, out_h, out_w, outch, n_samples),
@@ -247,7 +255,7 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
         a=zeros(ELT, out_h, out_w, outch, n_samples),
         eps_l=zeros(ELT, prev_h, prev_w, inch, n_samples),
         grad_a=zeros(ELT, out_h, out_w, outch, n_samples),
-        pad_next_eps=zeros(ELT, prev_h, prev_w, outch, n_samples),
+        pad_above_eps=zeros(ELT, prev_h, prev_w, outch, n_samples),
 
         # weight arrays
         weight=he_initialize((lr.f_h, lr.f_w, inch, outch), scale=2.2, adj=lr.adj),
@@ -276,6 +284,7 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
         adj=lr.adj,
         optimization=lr.optimization,
         padrule=lr.padrule,
+        pad=pad,
         stride=lr.stride,
         dobias=dobias,
         isoutput=lr.isoutput
@@ -370,8 +379,10 @@ function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
         activation_gradf = noop
     elseif lr.activation == :none
         activation_gradf = noop
+    elseif lr.activation == :regression
+        activation_gradf = noop
     else
-        error("Only :relu, :leaky_relu, :softmax and :none  supported, not $(Symbol(lr.activation)).")
+        error("Only :relu, :leaky_relu, :softmax, :regression and :none  supported, not $(Symbol(lr.activation)).")
     end
 
     if (lr.optimization == :adam) | (lr.optimization == :adamw)

@@ -3,6 +3,10 @@
 # ============================
 using BenchmarkTools
 using LinearAlgebra
+using SimpleNN
+
+const ELT = Float32 
+layers = []
 
 
 function slicemean!(arr_norm::AbstractArray, arr::AbstractArray, mu::AbstractVector, stddev::AbstractVector)
@@ -109,3 +113,22 @@ for (i, layer) in enumerate(layers)
         end
     end
 end
+
+
+# padding and image size calculations
+
+# TODO do we want ceiling or div?
+dim_out(imgx, filx, stride, pad) = div(imgx - filx + 2pad, stride) + 1
+same_pad(imgx,filx,stride) = div((imgx * (stride - 1) - stride + filx), 2)
+
+tst_img = [  
+    #imgdim, fildim, pad, stride
+    (28, 3, 1, 1)
+    (28, 5, 1, 0)  
+    (28, 5, 1, 1)
+    (28, 5, 1, 2)
+    (27,3,1,1)
+    (27,5,1,0)
+    (27,5,1,1)
+    (27,5,1,2)
+]

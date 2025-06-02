@@ -1,4 +1,4 @@
-# %% startup
+# %% startup   required for non-Julia aware environment like Zed REPL
 
 cd(joinpath(homedir(), "code", "SimpleNN"))
 using Pkg
@@ -30,6 +30,17 @@ one_conv = LayerSpec[
     outputlayerspec(outputdim=10, activation=:softmax, name=:output)
 ];
 
+le_net = LayerSpec[
+    inputlayerspec(h=28, w=28, outch=1, name=:input)
+    convlayerspec(outch=6, f_h=5, f_w=5, activation=:relu, name=:conv1, padrule=:none, optimization=:adamw, normalization=:batchnorm)
+    maxpoollayerspec(name=:maxpool1, f_h=2, f_w=2)
+    convlayerspec(outch=16, f_h=5, f_w=5, activation=:relu, name=:conv2, padrule=:none, optimization=:adamw, normalization=:batchnorm)
+    maxpoollayerspec(name=:maxpool2, f_h=2, f_w=2)
+    flattenlayerspec(name=:flatten)
+    linearlayerspec(outputdim=120, activation=:relu, name=:linear1, optimization=:adamw, normalization=:batchnorm)
+    linearlayerspec(outputdim=84, activation=:relu, name=:linear2, optimization=:adamw, normalization=:batchnorm)
+    outputlayerspec(outputdim=10, activation=:softmax, name=:output)
+]
 
 two_conv = LayerSpec[
     inputlayerspec(name=:input, h=28, w=28, outch=1)
@@ -63,10 +74,11 @@ three_linear = LayerSpec[
 preptest = true
 full_batch = 60_000
 minibatch_size = 50
-epochs = 5  # 15 epochs yields near perfect training convergence with dense linear layers
-layerspecs = one_conv
+epochs = 10  # 15 epochs yields near perfect training convergence with dense linear layers
+layerspecs = le_net
 
-hp = HyperParameters(lr=ELT(0.001), reg=:L2, regparm=ELT(0.00043), do_stats=false)  # reg=:L2, regparm=0.00043,
+# for le_net lr=ELT(0.0003) epochs = 10
+hp = HyperParameters(lr=ELT(0.0003), reg=:L2, regparm=ELT(0.00043), do_stats=false)  # reg=:L2, regparm=0.00043,
 
 # %%
 

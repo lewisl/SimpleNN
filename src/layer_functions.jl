@@ -35,11 +35,19 @@ The tensor dimensions follow Julia's column-major convention: (height, width, ch
 """
 function (layer::ConvLayer)(x::AbstractArray{ELT,4})
     layer.a_below .= x   # as an alias, this might not work for backprop though it seems to
+    pad = layer.pad
 
-    if layer.padrule == :same  # we know padding = 1 for :same
-        @views layer.pad_x[begin+1:end-1, begin+1:end-1, :, :] .= x
+    # @show size(layer.pad_x)
+    # @show size(x)
+
+
+    if layer.padrule == :same  # TODO  we know padding = 1 for :same  this might not be right for different filter dimensions
+        # the padded input is better than the input: duh!
+        @views layer.pad_x[begin+pad:end-pad, begin+pad:end-pad, :, :] .= x
+        use_x = layer.pad_x    # no allocation
     else
-        layer.pad_x .= x
+        # layer.pad_x .= x
+        use_x = x   # no allocation
     end
 
     # initialize output z with 0.0f0 if nobias or with bias: when dobias==false, layer.bias remains as initialized to zeros
@@ -48,7 +56,7 @@ function (layer::ConvLayer)(x::AbstractArray{ELT,4})
             @turbo layer.z[:, :, oc, :] .= layer.bias[oc]  # appropriate bias inserted in each element
         end
     else
-        fill!(layer.z, ELT(0.0))  # all initialized to zero, 1/2x time of inserting bias
+        @turbo fill!(layer.z, ELT(0.0))  # all initialized to zero, 1/2x time of inserting bias
     end
 
     # Combine bias initialization with convolution in a single pass
@@ -56,12 +64,10 @@ function (layer::ConvLayer)(x::AbstractArray{ELT,4})
         for oc in axes(layer.z, 3)  # output channels
             for j in axes(layer.z, 2)  # width
                 for i in axes(layer.z, 1)  # height
-                    # Initialize with bias or 0.0f0 and perform convolution in one pass: always zero if layer.dobias == false
-                    # layer.z[i, j, oc, b] = layer.bias[oc]                                          # ifelse(layer.dobias, layer.bias[oc], 0.0f0)
                     for ic in axes(layer.weight, 3)  # input channels
                         for fh in axes(layer.weight, 1)  # filter height
                             for fw in axes(layer.weight, 2)  # filter width
-                                layer.z[i, j, oc, b] += layer.pad_x[i+fh-1, j+fw-1, ic, b] *
+                                layer.z[i, j, oc, b] += use_x[i+fh-1, j+fw-1, ic, b] *   # layer.pad_x
                                                         layer.weight[fh, fw, ic, oc]
                             end
                         end
@@ -112,12 +118,23 @@ function (layer::ConvLayer)(layer_above)
 
     layer_above.eps_l .*= layer.grad_a
 
+    pad = layer.pad
+
+    # @show size(layer.pad_above_eps)
+    # @show size(layer_above.eps_l)
+    # @show layer.pad
+
     if layer.padrule == :none   # TODO even if pad were none we are never using this!
         # TODO does this work? and test if previous layer is img formatted (one of input, conv, maxpooling)
-        fill!(layer.pad_next_eps, ELT(0.0))
-        @views layer.pad_next_eps[2:end-1, 2:end-1, :, :] .= layer_above.eps_l
+        # fill!(layer.pad_above_eps, ELT(0.0))
+        thish, thisw, _, _ = size(layer_above.eps_l)
+        belowh, beloww, _, _ = size(layer.pad_above_eps)  # bigger
+        padh = div(belowh - thish, 2)
+        padw = div(beloww - thisw, 2)
+        # @show padh, padw
+        @views layer.pad_above_eps[begin+padh:end-padh, begin+padw:end-padw, :, :] .= layer_above.eps_l
     elseif layer.padrule == :same
-        layer.pad_next_eps .= layer_above.eps_l
+        layer.pad_above_eps .= layer_above.eps_l
     end
 
     layer.normalization_gradf(layer) # either noop or batchnorm_grad!
@@ -130,7 +147,7 @@ function (layer::ConvLayer)(layer_above)
                         for fj in axes(layer.weight, 2)
                             for fi in axes(layer.weight, 1)
                                 # Flipped weight indices for backward pass: use weight[f_h-fi+1,f_w-fj+1] instead of weight[fi,fj]
-                                layer.eps_l[i+fi-1, j+fj-1, ic, b] += layer.weight[f_h-fi+1, f_w-fj+1, ic, oc] * layer.pad_next_eps[i, j, oc, b]
+                                layer.eps_l[i+fi-1, j+fj-1, ic, b] += layer.weight[f_h-fi+1, f_w-fj+1, ic, oc] * layer.pad_above_eps[i, j, oc, b]
                             end
                         end
                     end
@@ -140,7 +157,7 @@ function (layer::ConvLayer)(layer_above)
     end
 
     # compute gradients
-    compute_grad_weight!(layer, n_samples)
+    compute_grad_weight!(layer, inverse_n_samples)
 
     if layer.dobias
         layer.grad_bias .= reshape(sum(layer_above.eps_l, dims=(1, 2, 4)), oc) .* inverse_n_samples
@@ -149,27 +166,32 @@ function (layer::ConvLayer)(layer_above)
     return     # nothing
 end
 
-function compute_grad_weight!(layer, n_samples)
+function compute_grad_weight!(layer, inverse_n_samples)
     H_out, W_out, _, _ = size(layer.eps_l)
-    sample_count_inverse = ELT(1.0) / ELT(n_samples)
+
+
+    # @show size(layer.pad_a_below)
+    # @show size(layer.a_below)
+
 
     # Initialize grad_weight to zero
     fill!(layer.grad_weight, ELT(0.0)) # no allocations; faster than assignment
-    if layer.padrule == :same
-        fill!(layer.pad_a_below, ELT(0.0))
-        @views layer.pad_a_below[2:end-1, 2:end-1, :, :] .= layer.a_below
-    else
-        layer.pad_a_below = layer.a_below  # set alias to a_below to use in loop below.  no allocation
+    if layer.padrule == :same  # remarkably, this works
+        pad = layer.pad
+        @views layer.pad_a_below[begin+pad:end-pad, begin+pad:end-pad, :, :] .= layer.a_below   
+        use_a_below = layer.pad_a_below   # no allocation
+    else  # when padding is :none (e.g., 0) then ...
+        use_a_below = layer.a_below  # set alias to a_below to use in loop below.  no allocation
     end
 
     # Use @views to avoid copying subarrays
     @inbounds for oc in axes(layer.eps_l, 3)      # 1:out_channels
         # View of the error for this output channel (all spatial positions, all batches)
         err = @view layer.eps_l[:, :, oc, :]      # size H_out × W_out × batch_size
-        for ic in axes(layer.pad_a_below, 3)          # 1:in_channels
+        for ic in axes(use_a_below, 3)          # layer.pad_a_below, 
             # View of the input activation for this channel
             # (We'll slide this view for each filter offset)
-            input_chan = @view layer.pad_a_below[:, :, ic, :]   # size H_in × W_in × batch_size
+            input_chan = @view use_a_below[:, :, ic, :]   # size H_in × W_in × batch_size
             for fj in axes(layer.weight, 2)
                 for fi in axes(layer.weight, 1)
                     # Extract the overlapping region of input corresponding to eps_l[:, :, oc, :]
@@ -182,7 +204,7 @@ function compute_grad_weight!(layer, n_samples)
     end
 
     # Average over batch (divide by batch_size)
-    layer.grad_weight .*= sample_count_inverse
+    layer.grad_weight .*= inverse_n_samples
     return   # nothing
 end
 
