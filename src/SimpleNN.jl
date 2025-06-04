@@ -62,7 +62,6 @@ export
     backprop!,
     update_weight_loop!,
     update_weights!,
-    update_batchnorm!,
     pre_adam!,
     pre_adam_batchnorm!,
     adam_helper!

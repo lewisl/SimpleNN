@@ -1,11 +1,9 @@
 #=
 TODO
-- test ConvLayer with no padding
 
 - test regression
 - make stats struct immutable
-
-- for commit message
+- ADAMW not working with reg=:none
 
 
 =#
@@ -150,7 +148,7 @@ end
 
 function setup_preds(predlayerspecs, layers::Vector{<:Layer}, n_samples)
     predlayers = allocate_layers(predlayerspecs, n_samples)
-    for (prlr, lr) in zip(predlayers, layers)
+    for (prlr, lr) in zip(predlayers, layers)     # TODO are we missing any other trainable parameters?
         if isa(prlr, ConvLayer) | isa(prlr, LinearLayer)
             prlr.weight .= lr.weight
             if prlr.dobias
@@ -260,13 +258,9 @@ end
 # ============================
 
 function feedforward!(layers::Vector{<:Layer}, x)
-
-    # @show size(layers[begin].a)
-    # @show size(x)
     layers[begin].a .= x
-    @inbounds for (i, lr) in zip(2:length(layers), layers[2:end])  # assumes that layers[1] MUST be input layer without checking!
-        # dispatch on type of lr
-        lr(layers[i-1].a)
+    @inbounds for (i, lr) in zip(2:length(layers), layers[2:end])  # assumes that layers[1] MUST be input layer without checking!        
+        lr(layers[i-1].a)  # dispatch on type of lr
     end
     return
 end
@@ -287,35 +281,6 @@ end
 ######################
 # update weights and optimization
 ######################
-
-
-function update_batchnorm!(layer, hp, t)
-    bn = layer.normparams
-    ad = layer.optparams
-    if isa(bn, BatchNorm) && isa(ad, AdamParam)
-        pre_adam_batchnorm!(bn, ad, t)
-        b1_divisor = ELT(1.0) / (ELT(1.0) - ad.b1^t)
-        b2_divisor = ELT(1.0) / (ELT(1.0) - ad.b2^t)
-
-        # Update gamma (scale) parameter - no weight decay for batch norm
-        @turbo for i in eachindex(bn.gam)
-            adam_term_gam = (bn.grad_m_gam[i] * b1_divisor) / (sqrt(bn.grad_v_gam[i] * b2_divisor) + IT)
-            bn.gam[i] -= hp.lr * adam_term_gam
-            # end
-
-            # Update beta (shift) parameter - no weight decay for batch norm
-            # @turbo for i in eachindex(bn.bet)
-            adam_term_bet = (bn.grad_m_bet[i] * b1_divisor) / (sqrt(bn.grad_v_bet[i] * b2_divisor) + IT)
-            bn.bet[i] -= hp.lr * adam_term_bet
-        end
-    else
-        # Simple SGD update if not using Adam/AdamW
-        @turbo for i in eachindex(bn.gam)
-            bn.gam[i] -= hp.lr * bn.grad_gam[i]
-            bn.bet[i] -= hp.lr * bn.grad_bet[i]
-        end
-    end
-end
 
 
 function update_weights!(layer::Layer, hp, t)
@@ -464,7 +429,7 @@ function train!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size=0, h
             else
                 x_part = x
                 y_part = y
-                loop = false
+                loop = false  # just do it once per epoch
             end
 
             batch_counter += 1
@@ -513,39 +478,36 @@ end
 
 function minibatch_prediction(layers::Vector{Layer}, x, y, costfunc=cross_entropy_cost)
     (out, full_batch) = size(y)
-    minibatch_size = size(layers[end].a, 2)
+    minibatch_size = size(layers[end].a, 2)  # TODO is this always going to work?
 
-    # setup minibatches
-    if minibatch_size == 0
-        # setup noop minibatch parameters
-        mini_num = 1
-        n_samples = full_batch
-    else
-        if rem(full_batch, minibatch_size) != 0
-            error("minibatch_size does not divide evenly into batch_size")
-        else
-            mini_num = div(full_batch, minibatch_size)
-            n_samples = minibatch_size
-        end
-    end
+    # pre-allocate outcomes for use in loop
+    preds = zeros(ELT, out, minibatch_size)
+    targets = zeros(ELT, out, minibatch_size)
 
     total_correct = 0
     total_cnt = 0
     total_cost = 0
-    # pre-allocate outcomes for use in loop
-    preds = zeros(ELT, out, n_samples)
-    targets = zeros(ELT, out, n_samples)
+    samples_left = full_batch
+    start_obs = end_obs = 0
+    loop = true
+    batch_counter = 0
 
-    for batno in 1:mini_num
-        if mini_num > 1
-            start_obs = (batno - 1) * minibatch_size + 1
+    @inbounds while loop
+        if samples_left > minibatch_size  # continue
+            start_obs = end_obs + 1
             end_obs = start_obs + minibatch_size - 1
-            x_part = view(x, :, :, :, start_obs:end_obs)
-            y_part = view(y, :, start_obs:end_obs)
-        else
-            x_part = x
-            y_part = y
+            n_samples = minibatch_size
+        else   # stop after this iteration setting the stop flag
+            start_obs = end_obs + 1
+            end_obs = start_obs + samples_left - 1
+            loop = false
+            n_samples = samples_left
         end
+        x_part = slice_minibatch(x, start_obs:end_obs)
+        y_part = slice_minibatch(y, start_obs:end_obs)
+        samples_left -= minibatch_size  # update the effective loop counter
+
+        batch_counter += 1
 
         feedforward!(layers, x_part)
 
@@ -560,7 +522,7 @@ function minibatch_prediction(layers::Vector{Layer}, x, y, costfunc=cross_entrop
         total_cost += cost
     end
 
-    return total_correct / total_cnt, total_cost / mini_num
+    return total_correct / total_cnt, total_cost / batch_counter
 end
 
 function prediction(predlayers::Vector{<:Layer}, x_input, y_input)

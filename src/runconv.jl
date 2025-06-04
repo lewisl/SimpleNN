@@ -23,22 +23,22 @@ const ELT = Float32
 # 64 channels is not great
 one_conv = LayerSpec[
     inputlayerspec(h=28, w=28, outch=1, name=:input)
-    convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, normalization=:batchnorm, optimization=:adamw)  # , normalization=:batchnorm  , optimization=:adamw
+    convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, padrule=:none, optimization=:adamw, normalization=:batchnorm)  # , normalization=:batchnorm  , optimization=:adamw
     maxpoollayerspec(name=:maxpool1, f_h=2, f_w=2)
     flattenlayerspec(name=:flatten)
-    linearlayerspec(outputdim=200, activation=:relu, name=:linear1, normalization=:batchnorm, optimization=:adamw)
+    linearlayerspec(outputdim=200, activation=:relu, name=:linear1,  optimization=:adamw, normalization=:batchnorm)   # , normalization=:batchnorm
     outputlayerspec(outputdim=10, activation=:softmax, name=:output)
 ];
 
 le_net = LayerSpec[
     inputlayerspec(h=28, w=28, outch=1, name=:input)
-    convlayerspec(outch=6, f_h=5, f_w=5, activation=:relu, name=:conv1, padrule=:none, optimization=:adamw, normalization=:batchnorm)
+    convlayerspec(outch=6, f_h=5, f_w=5, activation=:relu, name=:conv1, padrule=:none)  # optimization=:adamw, normalization=:batchnorm
     maxpoollayerspec(name=:maxpool1, f_h=2, f_w=2)
-    convlayerspec(outch=16, f_h=5, f_w=5, activation=:relu, name=:conv2, padrule=:none, optimization=:adamw, normalization=:batchnorm)
+    convlayerspec(outch=16, f_h=5, f_w=5, activation=:relu, name=:conv2, padrule=:none)  # optimization=:adamw,, normalization=:batchnorm)
     maxpoollayerspec(name=:maxpool2, f_h=2, f_w=2)
     flattenlayerspec(name=:flatten)
-    linearlayerspec(outputdim=120, activation=:relu, name=:linear1, optimization=:adamw, normalization=:batchnorm)
-    linearlayerspec(outputdim=84, activation=:relu, name=:linear2, optimization=:adamw, normalization=:batchnorm)
+    linearlayerspec(outputdim=120, activation=:relu, name=:linear1)   # optimization=:adamw, normalization=:batchnorm
+    linearlayerspec(outputdim=84, activation=:relu, name=:linear2)   # optimization=:adamw, normalization=:batchnorm
     outputlayerspec(outputdim=10, activation=:softmax, name=:output)
 ]
 
@@ -74,12 +74,12 @@ three_linear = LayerSpec[
 preptest = true
 full_batch = 60_000
 minibatch_size = 50
-epochs = 10  # 15 epochs yields near perfect training convergence with dense linear layers
+epochs = 10
 layerspecs = one_conv
 
-# for le_net lr=ELT(0.0003) epochs = 10
+# for le_net lr=ELT(0.0003) epochs = 5  reg=:none (until things work...)
 # for one_conv lr=ELT(0.001) epochs = 10
-hp = HyperParameters(lr=ELT(0.001), reg=:L2, regparm=ELT(0.00043), do_stats=false)  # reg=:L2, regparm=0.00043,
+hp = HyperParameters(lr=ELT(0.001), reg=:L2, regparm=ELT(0.00063), do_stats=false)  # reg=:L2, regparm=0.00043,
 
 # %%
 

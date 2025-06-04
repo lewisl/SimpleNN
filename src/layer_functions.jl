@@ -137,7 +137,7 @@ function (layer::ConvLayer)(layer_above)
         layer.pad_above_eps .= layer_above.eps_l
     end
 
-    layer.normalization_gradf(layer) # either noop or batchnorm_grad!
+    layer.normalization_gradf(layer, layer_above) # either noop or batchnorm_grad! TODO: should this receive the layer_above as input????
 
     @turbo for b in axes(layer.eps_l, 4)
         for oc in axes(layer.weight, 4)
