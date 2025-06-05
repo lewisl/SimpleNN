@@ -185,8 +185,9 @@ end
 # classifier and loss functions
 # =====================
 
-function dloss_dz!(layer, target)
-    layer.eps_l .= layer.a .- target
+function dloss_dz!(layer, target, current_batch_size)
+
+    @views layer.eps_l .= layer.a .- target  # [current_batch_size]
 end
 
 # tested to have no allocations

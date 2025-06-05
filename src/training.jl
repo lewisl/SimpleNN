@@ -3,7 +3,6 @@ TODO
 
 - test regression
 - make stats struct immutable
-- ADAMW not working with reg=:none
 
 
 =#
@@ -100,7 +99,7 @@ end
 # pre-alllocation of Layers
 # ============================
 
-function allocate_layers(lsvec::Vector{LayerSpec}, n_samples)
+function allocate_layers(lsvec::Vector{LayerSpec}, batch_size)
 
     Random.seed!(42)
     layerdat = Layer[]
@@ -111,17 +110,17 @@ function allocate_layers(lsvec::Vector{LayerSpec}, n_samples)
                 error("First layer must be the input layer.")
             else
                 push!(layerdat,
-                    InputLayer(lr, n_samples))
+                    InputLayer(lr, batch_size))
             end
             continue  # skip the ifs and go to next lr
         elseif lr.kind == :conv
-            push!(layerdat, ConvLayer(lr, layerdat[idx-1], n_samples))
+            push!(layerdat, ConvLayer(lr, layerdat[idx-1], batch_size))
         elseif lr.kind == :linear
-            push!(layerdat, LinearLayer(lr, layerdat[idx-1], n_samples))
+            push!(layerdat, LinearLayer(lr, layerdat[idx-1], batch_size))
         elseif lr.kind == :maxpool
-            push!(layerdat, MaxPoolLayer(lr, layerdat[idx-1], n_samples))
+            push!(layerdat, MaxPoolLayer(lr, layerdat[idx-1], batch_size))
         elseif lr.kind == :flatten
-            push!(layerdat, FlattenLayer(lr, layerdat[idx-1], n_samples))
+            push!(layerdat, FlattenLayer(lr, layerdat[idx-1], batch_size))
         else
             error("Found unrecognized layer kind")
         end
@@ -129,6 +128,7 @@ function allocate_layers(lsvec::Vector{LayerSpec}, n_samples)
 
     return layerdat
 end
+
 
 function allocate_stats(full_batch, minibatch_size, epochs)
     no_of_batches = div(full_batch, minibatch_size)
@@ -257,22 +257,24 @@ end
 # Training Loop
 # ============================
 
-function feedforward!(layers::Vector{<:Layer}, x)
+function feedforward!(layers::Vector{<:Layer}, x, mb_rng)
     layers[begin].a .= x
-    @inbounds for (i, lr) in zip(2:length(layers), layers[2:end])  # assumes that layers[1] MUST be input layer without checking!        
+    @inbounds for (i, lr) in zip(2:length(layers), layers[2:end])  # assumes that layers[1] MUST be input layer without checking!   
+        lr.mb_rng[] = mb_rng    # update the layer's value for minibatch range
         lr(layers[i-1].a)  # dispatch on type of lr
     end
     return
 end
 
-function backprop!(layers::Vector{<:Layer}, y)
+function backprop!(layers::Vector{<:Layer}, y, mb_rng)
     # output layer is different
-    dloss_dz!(layers[end], y)
-    layers[end](layers[end-1])
+    dloss_dz!(layers[end], y, mb_rng)
+    layers[end].mb_rng[] = mb_rng  # update the layer's value for minibatch range
+    layers[end](layers[end-1])   # calls layer function for backward pass, passes layers[end] and layers[end-1]
 
-    # skip over output layer (end) and input layer (begin)
-    nlayers = length(layers)
+    nlayers = length(layers)  # skip over output layer (end) and input layer (begin)
     @inbounds @views for (i, lr) in zip((nlayers-1):-1:2, reverse(layers[begin+1:end-1]))
+        lr.mb_rng[] = mb_rng   # update the layer's value for minibatch range
         lr(layers[i+1])
     end
     return
@@ -382,7 +384,7 @@ function update_weight_loop!(layers::Vector{<:Layer}, hp, counter)
     end
 end
 
-# helpers for minibatch views in training loop
+# helpers for minibatch views in training loop: works when range is an Int or a UnitRange{Int}
 @inline function slice_minibatch(x::AbstractArray{T,2}, range) where T
     view(x, :, range)
 end
@@ -406,13 +408,15 @@ function train!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size=0, h
 
     stats = allocate_stats(full_batch, minibatch_size, epochs)
     batch_counter = 0
+    last_batch = rem(full_batch, minibatch_size)
 
     for e = 1:epochs
         samples_left = full_batch
         start_obs = end_obs = 0
-        loop = true
+        # loop = true
+        current_batch_size = minibatch_size
 
-        @inbounds while loop 
+        @inbounds while samples_left > 0 
 
             if dobatch
                 if samples_left > minibatch_size  # continue
@@ -421,15 +425,18 @@ function train!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size=0, h
                 else   # stop after this iteration setting the stop flag
                     start_obs = end_obs + 1
                     end_obs = start_obs + samples_left - 1
-                    loop = false
+                    current_batch_size = samples_left  # now it has changed and we need to update
+                    # loop = false
                 end
-                x_part = slice_minibatch(x, start_obs:end_obs)
-                y_part = slice_minibatch(y, start_obs:end_obs)
-                samples_left -= minibatch_size  # update the effective loop counter
+                mb_rng = start_obs:end_obs
+                x_part = slice_minibatch(x, mb_rng)
+                y_part = slice_minibatch(y, mb_rng)
+                samples_left -= current_batch_size  # update the effective loop counter
             else
                 x_part = x
                 y_part = y
-                loop = false  # just do it once per epoch
+                samples_left = 0   # completing all samples in one batch
+                # loop = false  # just do it once per epoch
             end
 
             batch_counter += 1
@@ -437,9 +444,9 @@ function train!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size=0, h
             print("counter = ", batch_counter, "\r")
             flush(stdout)
 
-            feedforward!(layers, x_part)
+            feedforward!(layers, x_part, mb_rng)
 
-            backprop!(layers, y_part)
+            backprop!(layers, y_part, mb_rng)
 
             update_weight_loop!(layers, hp, batch_counter)
 
@@ -484,9 +491,12 @@ function minibatch_prediction(layers::Vector{Layer}, x, y, costfunc=cross_entrop
     preds = zeros(ELT, out, minibatch_size)
     targets = zeros(ELT, out, minibatch_size)
 
+    # accumulators
     total_correct = 0
     total_cnt = 0
     total_cost = 0
+
+    # loop control and counters
     samples_left = full_batch
     start_obs = end_obs = 0
     loop = true

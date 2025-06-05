@@ -1,3 +1,7 @@
+# ==========================================================
+# script for running and testing different network structures
+# ==========================================================
+
 # %% startup   required for non-Julia aware environment like Zed REPL
 
 cd(joinpath(homedir(), "code", "SimpleNN"))
@@ -6,7 +10,6 @@ Pkg.activate(".")
 Pkg.instantiate()
 
 
-# script for running and testing different network structures
 # %% packages and inputs
 
 
@@ -71,9 +74,11 @@ three_linear = LayerSpec[
 ];
 
 # %%   some hyperparameters
+
+
 preptest = true
 full_batch = 60_000
-minibatch_size = 50
+minibatch_size = 64
 epochs = 10
 layerspecs = one_conv
 
@@ -81,9 +86,12 @@ layerspecs = one_conv
 # for one_conv lr=ELT(0.001) epochs = 10
 hp = HyperParameters(lr=ELT(0.001), reg=:L2, regparm=ELT(0.00063), do_stats=false)  # reg=:L2, regparm=0.00043,
 
-# %%
+# %%  # setup the layers: set array sizes and pre-allocate data and weight arrays
 
 layers = setup_train(layerspecs, minibatch_size);
+
+# %%  load the data for train and testing, if applicable
+
 
 if !preptest
     x_train, y_train = setup_mnist(full_batch, preptest)
@@ -93,7 +101,7 @@ else
 end;
 
 
-# %%
+# %%  train the model
 
 stats = train!(layers; x=x_train, y=y_train, full_batch=full_batch,
     epochs=epochs, minibatch_size=minibatch_size, hp=hp);
@@ -104,12 +112,11 @@ stats = train!(layers; x=x_train, y=y_train, full_batch=full_batch,
 predlayerstrain = setup_preds(layerspecs, layers, minibatch_size);
 minibatch_prediction(predlayerstrain, x_train, y_train)
 
+
 # %% predict with testset
 
 predlayerstest = setup_preds(layerspecs, layers, minibatch_size);
 minibatch_prediction(predlayerstest, x_test, y_test)
-
-
 
 
 # %% full batch prediction on test set, much slower  -- to verify that minibatch_prediction produces same result
@@ -131,8 +138,6 @@ y_single = y_train[:, samplenumber];
 y_single = reshape(y_single, :, 1);
 
 
-display_mnist_digit(x_single)
-
 SimpleNN.feedforward!(pred1layers, x_single);
 pred1 = pred1layers[end].a;
 
@@ -140,3 +145,7 @@ target_digit = SimpleNN.find_max_idx(y_single[:, 1]) - 1;
 pred_digit = SimpleNN.find_max_idx(pred1[:, 1]) - 1;
 
 println("\nTarget digit: ", target_digit, "  Predicted digit: ", pred_digit)
+
+# %%  # display the selected digit
+
+display_mnist_digit(x_single)

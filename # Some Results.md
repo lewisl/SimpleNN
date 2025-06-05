@@ -171,7 +171,7 @@ minibatch_size = 50
 epochs = 10  # 15 epochs yields near perfect training convergence
 layerspecs = one_conv
 
-hp = HyperParameters(lr=0.1, reg=:L2, regparm=0.0004, do_stats=false)
+hp = HyperParameters(lr=0.1, reg=:L2, regparm=0.0004, do_stats=false)  # learning rate too high
 ```
 
 Results:
@@ -209,7 +209,7 @@ Results:
 #### two_conv for epochs with batch normalization, ADAM, L2 reg
 
 Model:
-```Julia
+```julia
 two_conv = LayerSpec[
     inputlayerspec(name=:input, h=28, w=28, outch=1)
     convlayerspec(name=:conv1, outch=32, f_h=3, f_w=3, activation=:relu,normalization=:batchnorm, optimization=:adam)
@@ -223,7 +223,7 @@ two_conv = LayerSpec[
 ```
 
 Hyperparamaters:
-```Julia
+```julia
 full_batch = 60_000
 minibatch_size = 50
 epochs = 5  # 15 epochs yields near perfect training convergence with dense linear layers
@@ -235,3 +235,32 @@ hp = HyperParameters(lr=0.0005, reg=:L2, regparm=0.00043, do_stats=false)
 Results:
 > Training: (0.9892666666666666, 0.06495281077782712)
 > Test: (0.9749, 0.1374551953107863)
+
+#### one_conv with batch normalization, L2 reg, ADAMW optimization
+
+Model:
+```julia
+one_conv = LayerSpec[
+    inputlayerspec(h=28, w=28, outch=1, name=:input)
+    convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, padrule=:none, optimization=:adamw, normalization=:batchnorm)  # , normalization=:batchnorm  , optimization=:adamw
+    maxpoollayerspec(name=:maxpool1, f_h=2, f_w=2)
+    flattenlayerspec(name=:flatten)
+    linearlayerspec(outputdim=200, activation=:relu, name=:linear1,  optimization=:adamw, normalization=:batchnorm)   # , normalization=:batchnorm
+    outputlayerspec(outputdim=10, activation=:softmax, name=:output)
+];
+```
+
+Hyperparameters:
+```julia
+preptest = true
+full_batch = 60_000
+minibatch_size = 50
+epochs = 10
+layerspecs = one_conv
+
+hp = HyperParameters(lr=ELT(0.001), reg=:L2, regparm=ELT(0.00063), do_stats=false)  # reg=:L2, regparm=0.00043,
+```
+
+Results:
+> Training:  (0.9997666666666667, 0.0036002758f0)
+> Test:      (0.9864, 0.09357253f0)  # BEST

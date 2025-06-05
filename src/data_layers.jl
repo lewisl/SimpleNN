@@ -136,18 +136,56 @@ end
 # Structs for layers: hold pre-allocated weights, bias, data storage
 # ============================
 
+# Base.@kwdef mutable struct Slice
+#     # for conv, some shared with maxpool
+#     z4::SubArray{ELT,4} = ELT[;;;;]
+#     znorm4::SubArray{ELT,4} = ELT[;;;;]
+#     a4::SubArray{ELT,4} = ELT[;;;;]
+#     a_below4::SubArray{ELT,4} = ELT[;;;;]
+#     pad_a_below::SubArray{ELT,4} = ELT[;;;;]
+#     eps_l4::SubArray{ELT,4} = ELT[;;;;]
+#     pad_above_eps::SubArray{ELT,4} = ELT[;;;;]
+#     grad_a4::SubArray{ELT,4} = ELT[;;;;]
+#     pad_x::SubArray{ELT,4} = ELT[;;;;]
+
+#     # for linear, some shared with flatten
+#     z::SubArray{ELT,2} = ELT[;;]       # feed forward linear combination result
+#     z_norm::SubArray{ELT,2} = ELT[;;]  # if doing batchnorm
+#     a::SubArray{ELT,2} = ELT[;;]       # feed forward activation output
+#     grad_a::SubArray{ELT,2} = ELT[;;]  # backprop derivative of activation output
+#     a_below::SubArray{ELT,2} = ELT[;;]  
+#     eps_l::SubArray{ELT,2} = ELT[;;]   # backprop error of the layer
+
+#     # for maxpooling
+#     # a: use a4
+#     mask::SubArray{Bool,4} = Bool[;;;;]
+#     # eps_l: use eps_l4
+
+#     # for flatten
+#     dl_dflat::SubArray{ELT,2} = ELT[;;]
+#     # a: use a
+#     # eps_l: use eps_l4
+
+# end
+
 
 Base.@kwdef struct ConvLayer <: Layer
     # data arrays
-    z::Array{ELT,4}  # = ELT[;;;;]
-    z_norm::Array{ELT,4}  # = ELT[;;;;]  # if doing batchnorm: 2d to simplify batchnorm calcs
-    a::Array{ELT,4}  # = ELT[;;;;]
-    a_below::Array{ELT,4}  # = ELT[;;;;]
-    pad_a_below::Array{ELT,4}  # = ELT[;;;;]
-    eps_l::Array{ELT,4}  # = ELT[;;;;]
-    pad_above_eps::Array{ELT,4}  # = ELT[;;;;]  # TODO need to test if this is needed given successive conv layer sizes
-    grad_a::Array{ELT,4}  # = ELT[;;;;]
-    pad_x::Array{ELT,4}  # = ELT[;;;;]
+    z::Array{ELT,4}  
+    z_norm::Array{ELT,4}    # if doing batchnorm: 2d to simplify batchnorm calcs
+    a::Array{ELT,4}  
+    a_below::Array{ELT,4}  
+    pad_a_below::Array{ELT,4}  
+    eps_l::Array{ELT,4}  
+    pad_above_eps::Array{ELT,4}    # TODO need to test if this is needed given successive conv layer sizes
+    grad_a::Array{ELT,4}  
+    pad_x::Array{ELT,4}  
+
+    # slices for minibatches of differing lengths
+    # slices::Slice
+
+    # special minibatch range used for data arrays
+    mb_rng::Ref{UnitRange{Int}}
 
     # weight arrays
     weight::Array{ELT,4}  # = ELT[;;;;]  # (filter_h, filter_w, in_channels, out_channels)
@@ -179,6 +217,7 @@ Base.@kwdef struct ConvLayer <: Layer
     pad::Int64
     stride::Int64
     dobias::Bool
+    # doslice::Bool
     isoutput::Bool
 end
 
@@ -191,6 +230,8 @@ dim_out(imgx, filx, stride, pad) = div(imgx - filx + 2pad, stride) + 1
 function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
     outch = lr.outch
     prev_h, prev_w, inch, _ = size(prevlayer.a)
+
+    # slice = Slice()
 
     # TODO: this assumes square images and square filters!  FIX
     pad = ifelse(lr.padrule == :same, same_pad(prev_h,lr.f_h, lr.stride), 0)  
@@ -256,6 +297,13 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
         eps_l=zeros(ELT, prev_h, prev_w, inch, n_samples),
         grad_a=zeros(ELT, out_h, out_w, outch, n_samples),
         pad_above_eps=zeros(ELT, prev_h, prev_w, outch, n_samples),
+        mb_rng = Ref(1:n_samples),
+
+        # slice = Slice(z4=view(z,:,:,:,:), znorm4=view(z_norm,:,:,:,:), a4=view(a,:,:,:,:),
+        #             a_below4=view(a_below,:,:,:,:), pad_a_below=view(pad_a_below,:,:,:,:),
+        #             eps_l4=view(eps_l,:,:,:,:), pad_above_eps=view(pad_a_above,:,:,:,:),
+        #             grad_a4=view(grad_a,:,:,:,:), pad_x=view(pad_x,:,:,:,:)),
+        # slice = Slice(),
 
         # weight arrays
         weight=he_initialize((lr.f_h, lr.f_w, inch, outch), scale=2.2, adj=lr.adj),
@@ -287,19 +335,27 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
         pad=pad,
         stride=lr.stride,
         dobias=dobias,
+        # doslice=false,
         isoutput=lr.isoutput
     )
 end
 
 
+
 Base.@kwdef struct LinearLayer <: Layer
-    # data arrays
+    # data array views
     z::Array{ELT,2}  #     = ELT[;;]       # feed forward linear combination result
     z_norm::Array{ELT,2} #      = ELT[;;]  # if doing batchnorm
     a::Array{ELT,2}  #     = ELT[;;]      # feed forward activation output
     grad_a::Array{ELT,2}  #   = ELT[;;]  # backprop derivative of activation output
     a_below::Array{ELT,2}  #   = ELT[;;]
     eps_l::Array{ELT,2}   #   = ELT[;;]   # backprop error of the layer
+
+    # slices for minibatches of differing lengths
+    # slices::Slice
+
+    # special minibatch range used for data arrays
+    mb_rng::Ref{UnitRange{Int}}
 
     # weight arrays
     weight::Array{ELT,2}     # = ELT[;;] # (output_dim, input_dim)
@@ -328,6 +384,7 @@ Base.@kwdef struct LinearLayer <: Layer
     optimization::Symbol
     adj::ELT
     dobias::Bool
+    # doslice::Bool
     isoutput::Bool   # is this the output layer?
 end
 
@@ -403,6 +460,11 @@ function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
         eps_l=zeros(ELT, outputdim, n_samples),
         grad_a=zeros(ELT, outputdim, n_samples),
 
+        mb_rng = Ref(1:n_samples),
+        # slice = Slice(z=view(z,:,:), znorm=view(z_norm,:,:), a=view(a,:,:),
+        #             a_below=view(a_below,:,:), eps_l=view(eps_l,:,:), grad_a=view(grad_a,:,:)),
+        # slice = Slice(),
+
         # weight arrays
         weight=he_initialize((outputdim, inputs), scale=1.5, adj=lr.adj),
         bias=zeros(ELT, outputdim),
@@ -430,9 +492,11 @@ function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
         optimization=lr.optimization,
         adj=lr.adj,
         dobias=dobias,
-        isoutput=lr.isoutput
+        # doslice=false,
+        isoutput=lr.isoutput    
     )
 end
+
 
 # no weight, bias, gradients, activation
 Base.@kwdef struct FlattenLayer <: Layer
@@ -442,6 +506,13 @@ Base.@kwdef struct FlattenLayer <: Layer
     a::Array{ELT,2} = ELT[;;]
     eps_l::Array{ELT,4} = ELT[;;;;]
     isoutput::Bool
+    # doslice::Bool
+
+    # slices for minibatches of differing lengths
+    # slices::Slice
+
+    # special minibatch range used for data arrays
+    mb_rng::Ref{UnitRange{Int}}
 end
 
 # constructor method to prepare inputs and create layer
@@ -455,9 +526,16 @@ function FlattenLayer(lr::LayerSpec, prevlayer, n_samples)
         a=zeros(ELT, outputdim, n_samples),
         dl_dflat=zeros(ELT, outputdim, n_samples),
         eps_l=zeros(ELT, h, w, ch, n_samples),
-        isoutput=lr.isoutput
+        isoutput=lr.isoutput,
+        mb_rng = Ref(1:n_samples),
+        # doslice=false,
+
+        # slice = Slice(dl_dlfat=view(dl_dflat,:,:), a=view(a,:,:), eps_l=view(eps_l,:,:))
+        # slice = Slice()
     )
 end
+
+
 
 Base.@kwdef struct InputLayer <: Layer     # we only have this to simplify feedforward loop
     name::Symbol = :noname
@@ -467,16 +545,19 @@ Base.@kwdef struct InputLayer <: Layer     # we only have this to simplify feedf
     outch::Int64 = 0
     outputdim::Int64 = 0
     a::Array{ELT}   # no default provided because dims different for :image vs :linear
+
+    # special minibatch range used for data arrays
+    mb_rng::Ref{UnitRange{Int}}
 end
 
 function InputLayer(lr::LayerSpec, n_samples)
     if lr.outputdim > 0  # dense input layer
         InputLayer(name=lr.name, kind=:linear,
-            outputdim=lr.outputdim,
+            outputdim=lr.outputdim, mb_rng = Ref(1:n_samples),
             a=zeros(ELT, lr.outputdim, n_samples))
     elseif lr.outch > 0  # image input layer
         InputLayer(name=lr.name, kind=:image,
-            out_h=lr.h, out_w=lr.w, outch=lr.outch,
+            out_h=lr.h, out_w=lr.w, outch=lr.outch, mb_rng = Ref(1:n_samples),
             a=zeros(ELT, lr.h, lr.w,  lr.outch, n_samples))
     end
 end
@@ -488,6 +569,13 @@ Base.@kwdef struct MaxPoolLayer <: Layer
     mask::Array{Bool,4} = Bool[;;;;]
     eps_l::Array{ELT,4} = ELT[;;;;]
     isoutput::Bool
+    # doslice::Bool
+
+    # slices for minibatches of differing lengths
+    # slices::Slice
+
+    # special minibatch range used for data arrays
+    mb_rng::Ref{UnitRange{Int}}
 end
 
 # constructor method to prepare inputs and create layer
@@ -504,6 +592,11 @@ function MaxPoolLayer(lr::LayerSpec, prevlayer, n_samples)
         a=zeros(ELT, out_h, out_w, outch, batch_size),
         mask=falses(in_h, in_w, outch, batch_size),
         eps_l=zeros(ELT, in_h, in_w, outch, batch_size),
-        isoutput=lr.isoutput
+        isoutput=lr.isoutput,
+        # doslice=false,
+        mb_rng = Ref(1:batch_size),
+
+        # slice=Slice()
+        # slice = Slice(mask=view(mask,:,:,:,:), a=view(a,:,:,:,:), eps_l=view(eps_l,:,:,:,:))
     )
 end
