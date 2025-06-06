@@ -3,8 +3,8 @@
 function setup_mnist(full_batch, preptest=false)
     trainset = MNIST(:train)
     testset = MNIST(:test)
-    @show size(trainset)
-    @show size(testset)
+    # @show size(trainset)
+    # @show size(testset)
 
     x_train = trainset.features[1:28, 1:28, 1:full_batch]
     x_train = ELT.(x_train)

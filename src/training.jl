@@ -257,24 +257,24 @@ end
 # Training Loop
 # ============================
 
-function feedforward!(layers::Vector{<:Layer}, x, mb_rng)
+function feedforward!(layers::Vector{<:Layer}, x)
     layers[begin].a .= x
     @inbounds for (i, lr) in zip(2:length(layers), layers[2:end])  # assumes that layers[1] MUST be input layer without checking!   
-        lr.mb_rng[] = mb_rng    # update the layer's value for minibatch range
+        # lr.mb_rng[] = mb_rng    # update the layer's value for minibatch range
         lr(layers[i-1].a)  # dispatch on type of lr
     end
     return
 end
 
-function backprop!(layers::Vector{<:Layer}, y, mb_rng)
+function backprop!(layers::Vector{<:Layer}, y)
     # output layer is different
-    dloss_dz!(layers[end], y, mb_rng)
-    layers[end].mb_rng[] = mb_rng  # update the layer's value for minibatch range
+    dloss_dz!(layers[end], y)
+    # layers[end].mb_rng[] = mb_rng  # update the layer's value for minibatch range
     layers[end](layers[end-1])   # calls layer function for backward pass, passes layers[end] and layers[end-1]
 
     nlayers = length(layers)  # skip over output layer (end) and input layer (begin)
     @inbounds @views for (i, lr) in zip((nlayers-1):-1:2, reverse(layers[begin+1:end-1]))
-        lr.mb_rng[] = mb_rng   # update the layer's value for minibatch range
+        # lr.mb_rng[] = mb_rng   # update the layer's value for minibatch range
         lr(layers[i+1])
     end
     return
@@ -444,9 +444,9 @@ function train!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size=0, h
             print("counter = ", batch_counter, "\r")
             flush(stdout)
 
-            feedforward!(layers, x_part, mb_rng)
+            feedforward!(layers, x_part)
 
-            backprop!(layers, y_part, mb_rng)
+            backprop!(layers, y_part)
 
             update_weight_loop!(layers, hp, batch_counter)
 

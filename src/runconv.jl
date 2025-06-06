@@ -78,7 +78,7 @@ three_linear = LayerSpec[
 
 preptest = true
 full_batch = 60_000
-minibatch_size = 64
+minibatch_size = 50
 epochs = 10
 layerspecs = one_conv
 
