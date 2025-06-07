@@ -33,29 +33,39 @@ struct NoNorm <: NormParam
 end   # a noop struct when not doing Batch Normalization
 
 
-function batchnorm!(layer::LinearLayer)
+function batchnorm!(layer::LinearLayer, current_batch_size::Int)
     bn = layer.normparams
+    cb = current_batch_size
+    cb_rng = 1:cb
+    vzn = slice_minibatch(layer.z_norm, cb_rng)
+    vz = slice_minibatch(layer.z, cb_rng)
 
     if bn.istraining[]        # access value of Ref, like a 1 element array
         mean!(bn.mu, layer.z)
         bn.stddev .= std(layer.z, dims=2)
 
-        @turbo @. layer.z_norm = (layer.z - bn.mu) / (bn.stddev + IT) # normalized: often xhat or zhat
-        @turbo @. layer.z = layer.z_norm * bn.gam + bn.bet  # shift & scale: often called y
+        @turbo @. @views vzn = (vz - bn.mu) / (bn.stddev + IT) # normalized: often xhat or zhat
+        @turbo @. @views vz = vzn * bn.gam + bn.bet  # shift & scale: often called y
         @. bn.mu_run = ifelse(bn.mu_run[1] == ELT(0.0), bn.mu, ELT(0.95) * bn.mu_run + ELT(0.05) * bn.mu)
         @. bn.std_run = ifelse(bn.std_run[1] == ELT(0.0), bn.stddev, ELT(0.95) * bn.std_run + ELT(0.05) * bn.stddev)
     else  # prediction: use running mean and stddev
-        @turbo @. layer.z_norm = (layer.z - bn.mu_run) / (bn.std_run + IT) # normalized: aka xhat or zhat
-        @turbo @. layer.z = layer.z_norm * bn.gam + bn.bet  # shift & scale: often called y
+        @turbo @. vzn = (vz - bn.mu_run) / (bn.std_run + IT) # normalized: aka xhat or zhat
+        @turbo @. vz = vzn * bn.gam + bn.bet  # shift & scale: often called y
     end
     return
 end
 
-function batchnorm!(layer::ConvLayer)
+function batchnorm!(layer::ConvLayer, current_batch_size)
     bn = layer.normparams
+    cb = current_batch_size
+    cb_rng = 1:cb
+    vzn = slice_minibatch(layer.z_norm, cb_rng)
+    vz = slice_minibatch(layer.z, cb_rng)
+
+
     c = size(layer.z, 3)
     if bn.istraining[]    # access value of Ref, like a 1 element array
-        @inbounds @fastmath for (cidx, ch_z, ch_z_norm) in zip(1:c, eachslice(layer.z, dims=3), eachslice(layer.z_norm, dims=3))
+        @inbounds @fastmath for (cidx, ch_z, ch_z_norm) in zip(1:c, eachslice(vz, dims=3), eachslice(vzn, dims=3))
             # Compute statistics
             bn.mu[cidx] = mean(ch_z)
             bn.stddev[cidx] = std(ch_z, corrected=false)
@@ -71,7 +81,7 @@ function batchnorm!(layer::ConvLayer)
         @. bn.mu_run = ifelse(bn.mu_run[1] == ELT(0.0), bn.mu, ELT(0.95) * bn.mu_run + ELT(0.05) * bn.mu)
         @. bn.std_run = ifelse(bn.std_run[1] == ELT(0.0), bn.stddev, ELT(0.95) * bn.std_run + ELT(0.05) * bn.stddev)
     else
-        @inbounds @fastmath for (cidx, ch_z, ch_z_norm) in zip(1:c, eachslice(layer.z, dims=3), eachslice(layer.z_norm, dims=3))
+        @inbounds @fastmath for (cidx, ch_z, ch_z_norm) in zip(1:c, eachslice(vz, dims=3), eachslice(vzn, dims=3))
             # Pre-compute inverse std for efficiency
             inv_std = ELT(1.0) / (bn.std_run[cidx] + IT)
 
@@ -83,44 +93,53 @@ function batchnorm!(layer::ConvLayer)
 end
 
 
-function batchnorm_grad!(layer::LinearLayer)
+function batchnorm_grad!(layer::LinearLayer, current_batch_size)
     bn = layer.normparams
-    mb = size(layer.eps_l, 2)
-    inverse_mb_size = ELT(1.0) / ELT(mb)
+    cb = current_batch_size
+    cb_rng = 1:cb
+    # mb = size(layer.eps_l, 2)
+    inverse_mb_size = ELT(1.0) / ELT(cb)
+    veps_l = slice_minibatch(layer.eps_l, cb_rng)
+    vzn = slice_minibatch(layer.z_norm, cb_rng)
 
     # replace one-liner with vectorized loop: bn.grad_bet .= sum(layer.eps_l, dims=2) .* inverse_mb_size  # ./ mb
     fill!(bn.grad_bet, ELT(0.0))
-    @turbo for j in axes(layer.eps_l, 2)
+    @turbo for j in cb_rng   # axes(layer.eps_l, 2)
         for i in axes(layer.eps_l, 1)
             bn.grad_bet[j] += layer.eps_l[i,j] * inverse_mb_size
         end
     end
     # replace one-liner with vectorized loop: bn.grad_gam .= sum(layer.eps_l .* layer.z_norm, dims=2)  .* inverse_mb_size  # ./ mb
     fill!(bn.grad_gam, ELT(0.0))
-    @turbo for j in axes(layer.eps_l, 2)
+    @turbo for j in cb_rng  # axes(layer.eps_l, 2)
         for i in axes(layer.eps_l, 1)
             bn.grad_gam[j] += layer.eps_l[i,j] * layer.z_norm[i,j] * inverse_mb_size
         end
     end
 
-    layer.eps_l .= bn.gam .* layer.eps_l  # often called dELTa_z_norm at this stage
+    veps_l .= bn.gam .* veps_l  # often called dELTa_z_norm at this stage
     # often called dELTa_z, dx, dout, or dy
-    layer.eps_l .= (inverse_mb_size .* (ELT(1.0) ./ (bn.stddev .+ IT)) .*
-                    (mb .* layer.eps_l .- sum(layer.eps_l, dims=2) .-
-                    layer.z_norm .* sum(layer.eps_l .* layer.z_norm, dims=2)))   # replace with non-allocating approach
+    veps_l .= (inverse_mb_size .* (ELT(1.0) ./ (bn.stddev .+ IT)) .*
+                    (cb .* veps_l .- sum(veps_l, dims=2) .-
+                    vzn .* sum(veps_l .* vzn, dims=2)))   # replace with non-allocating approach
 end
 
 
-function batchnorm_grad!(layer::ConvLayer, layer_above)
+function batchnorm_grad!(layer::ConvLayer, layer_above, current_batch_size)
     bn = layer.normparams
-    (_, _, c, mb) = size(layer.pad_above_eps)
-    inverse_mb_size = ELT(1.0) / ELT(mb)
+    cb = current_batch_size
+    cb_rng = 1:cb
+    veps_l_above = slice_minibatch(layer_above.eps_l, cb_rng)
+    vzn = slice_minibatch(layer.z_norm, cb_rng)
+    vpa_eps_l = slice_minibatch(layer.pad_above_eps, cb_rng)
+    (_, _, c, _) = size(layer.pad_above_eps)
+    inverse_mb_size = ELT(1.0) / ELT(cb)
 
     # Compute gradients for beta and gamma
-    bn.grad_bet .= reshape(sum(layer_above.eps_l, dims=(1, 2, 4)),c)  .* inverse_mb_size   # ./ mb
-    bn.grad_gam .= reshape(sum(layer_above.eps_l .* layer.z_norm, dims=(1, 2, 4)), c) .* inverse_mb_size  # ./ mb
+    bn.grad_bet .= reshape(sum(veps_l_above, dims=(1, 2, 4)),c)  .* inverse_mb_size   # ./ mb
+    bn.grad_gam .= reshape(sum(veps_l_above .* vzn, dims=(1, 2, 4)), c) .* inverse_mb_size  # ./ mb
 
-    @inbounds @fastmath for (cidx, ch_z, ch_z_norm) in zip(1:c, eachslice(layer.pad_above_eps, dims=3), eachslice(layer.z_norm,dims=3))
+    @inbounds @fastmath for (cidx, ch_z, ch_z_norm) in zip(1:c, eachslice(vpa_eps_l, dims=3), eachslice(vzn,dims=3))
         # Step 1: Scale by gamma (dELTa_z_norm)
         ch_z .= bn.gam[cidx] .* ch_z
 
@@ -136,9 +155,9 @@ function batchnorm_grad!(layer::ConvLayer, layer_above)
 
         # Step 3: Compute final gradient (dELTa_z)
         # Formula: (1/mb) * (1/stddev) * (mb*dELTa_z_norm - sum(dELTa_z_norm) - z_norm*sum(dELTa_z_norm*z_norm))
-        scale = ELT(1.0) / mb / (bn.stddev[cidx] + IT)
+        scale = ELT(1.0) / cb / (bn.stddev[cidx] + IT)
         @turbo for i in eachindex(ch_z)
-            ch_z[i] = scale * (mb * ch_z[i] - ch_sum - ch_z_norm[i] * ch_prod_sum)
+            ch_z[i] = scale * (cb * ch_z[i] - ch_sum - ch_z_norm[i] * ch_prod_sum)
         end
     end
 end
@@ -147,20 +166,24 @@ end
 # activation functions
 # =====================
 
-function relu!(layer)
-    # @inbounds @fastmath begin
-    @turbo for i in eachindex(layer.z)
-        layer.a[i] = ifelse(layer.z[i] >= ELT(0.0), layer.z[i], ELT(0.0)) # no allocations
+function relu!(layer, current_batch_size)
+    cb = current_batch_size
+    cb_rng = 1:cb
+    vz = slice_minibatch(layer.z,cb_rng)
+    va = slice_minibatch(layer.a, cb_rng)
+    @turbo for i in eachindex(vz)
+        va[i] = ifelse(vz[i] >= ELT(0.0), vz[i], ELT(0.0)) # no allocations
     end
-    # end
 end
 
-function leaky_relu!(layer)
-    # @inbounds @fastmath begin
-        @turbo for i in eachindex(layer.z)
-            layer.a[i] = ifelse(layer.z[i] >= ELT(0.0), layer.z[i], layer.adj * layer.z[i]) # no allocations
-        end
-    # end
+function leaky_relu!(layer, current_batch_size)
+    cb = current_batch_size
+    cb_rng = 1:cb
+    vz = slice_minibatch(layer.z,cb_rng)
+    va = slice_minibatch(layer.a, cb_rng)
+    @turbo for i in eachindex(vz)
+        va[i] = ifelse(vz[i] >= ELT(0.0), vz[i], layer.adj * vz[i]) # no allocations
+    end
 end
 
 
@@ -168,15 +191,23 @@ end
 @inline noop(args...) = nothing
 
 
-function relu_grad!(layer)   # I suppose this is really leaky_relu...
-    @turbo for i = eachindex(layer.z)  # when passed any array, this will update in place
-        layer.grad_a[i] = ifelse(layer.z[i] > ELT(0.0), ELT(1.0), ELT(0.0))  # prevent vanishing gradients by not using 0.0f0
+function relu_grad!(layer, current_batch_size)   # I suppose this is really leaky_relu...
+    cb = current_batch_size
+    cb_rng = 1:cb
+    vz = slice_minibatch(layer.z,cb_rng)
+    vgrada = slice_minibatch(layer.grad_a, cb_rng)
+    @turbo for i = eachindex(vz)  # when passed any array, this will update in place
+        vgrada[i] = ifelse(vz[i] > ELT(0.0), ELT(1.0), ELT(0.0))  # prevent vanishing gradients by not using 0.0f0
     end
 end
 
-function leaky_relu_grad!(layer)   # I suppose this is really leaky_relu...
+function leaky_relu_grad!(layer, current_batch_size)   # I suppose this is really leaky_relu...
+    cb = current_batch_size
+    cb_rng = 1:cb
+    vz = slice_minibatch(layer.z, cb_rng)
+    vgrada = slice_minibatch(layer.grad_a, cb_rng)
     @turbo for i = eachindex(layer.z)  # when passed any array, this will update in place
-        layer.grad_a[i] = ifelse(layer.z[i] > ELT(0.0), ELT(1.0), layer.adj)  # prevent vanishing gradients by not using 0.0f0
+        vgrada[i] = ifelse(vz[i] > ELT(0.0), ELT(1.0), layer.adj)  # prevent vanishing gradients by not using 0.0f0
     end
 end
 
@@ -185,39 +216,70 @@ end
 # classifier and loss functions
 # =====================
 
-function dloss_dz!(layer, target)
+function dloss_dz!(layer, target, current_batch_size::Int) # TODO we assume this is always dense linear
+    cb = current_batch_size
+    cb_rng = 1:cb
 
-    @views layer.eps_l .= layer.a .- target  # [current_batch_size]
+    @turbo @views layer.eps_l[:, cb_rng] .= layer.a[:, cb_rng] .- target  # [current_batch_size]
 end
 
 # tested to have no allocations
-function softmax!(layer)
-    for c in axes(layer.z, 2)
+function softmax!(layer, current_batch_size::Int)
+    cb = current_batch_size
+    for b in 1:cb   # axes(layer.z, 2)
         # Find maximum in this column
         max_val = typemin(ELT)
         @turbo for i in axes(layer.z, 1)
-            max_val = max(max_val, layer.z[i, c])
+            max_val = max(max_val, layer.z[i, b])
         end
 
         # Compute exp and sum in one pass
         sum_exp = ELT(0.0)
         @turbo for i in axes(layer.z, 1)
-            layer.a[i, c] = exp(layer.z[i, c] - max_val)
-            sum_exp += layer.a[i, c]
+            layer.a[i, b] = exp(layer.z[i, b] - max_val)
+            sum_exp += layer.a[i, b]
         end
 
         # Normalize
         sum_exp = sum_exp + IT  # Add epsilon for numerical stability
         @turbo for i in axes(layer.z, 1)
-            layer.a[i, c] /= sum_exp
+            layer.a[i, b] /= sum_exp
         end
     end
     return
 end
 
-function logistic!(layer)
-    @fastmath layer.a .= ELT(1.0) ./ (ELT(1.0) .+ exp.(.-layer.z))
+# TODO do we need a grad version?  of course, we do...
+function logistic!(layer, current_batch_size)
+    cb = current_batch_size
+    cb_rng = 1:cb
+    vz = slice_minibatch(layer.z,cb_rng)
+    va = slice_minibatch(layer.a, cb_rng)
+
+    @turbo va .= ELT(1.0) ./ (ELT(1.0) .+ exp.(.-vz))
 end
+
+# TODO  need to verify logic for this
+function logistic_grad!(layer, current_batch_size)
+    cb = current_batch_size
+    cb_rng = 1:cb
+    vz = slice_minibatch(layer.z,cb_rng)
+    vgrada = slice_minibatch(layer.grad_a, cb_rng)
+    #
+    @turbo vgrada .= nothing
+end
+
+#=
+function sigmoid!(a::AbstractArray{Float64}, z::AbstractArray{Float64})
+    @fastmath a[:] = 1.0 ./ (1.0 .+ exp.(.-z))  
+end
+
+function sigmoid_gradient!(grad::AbstractArray{Float64}, z::AbstractArray{Float64})
+    sigmoid!(grad, z)
+    @fastmath grad[:] = grad .* (1.0 .- grad)
+end
+=#
+
 
 function regression!(layer)
     layer.a[:] = layer.z[:]

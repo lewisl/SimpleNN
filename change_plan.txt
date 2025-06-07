@@ -1,0 +1,67 @@
+What we need to do:
+
+- Set different slice ranges for several arrays
+
+- Set different looping ranges
+
+- Both can be done with similar approach.
+
+- Test with last minibatch of different size
+
+We can:
+- set a new range variable or set a new range upper value.  no perf difference--using upper value gives more flexibility.
+
+When using the normal range we don't want any overhead: there is really no difference because the array operations dominate.
+
+OK to have overhead for the different minibatch size-but, turns out there won't be any.
+
+We can have a range variable that we set with an if test.  as long as type stable no execution overhead, but we have the overhead of the if test--several times.
+
+Do it in the feedfwd and backprop functions so we do it once for all layers.
+
+
+What will the size of the result be for the sliced layer functions?  the sliced size of mutated arrays or the full size of the mutated arrays?  
+	a: the next function in the feedforward or backprop loop receives the full layer as its input, accesses an array field--so the callee must slice what it wants from that array
+
+Make sure that array dimensions don't drop:  
+	A: a single value in a slice drops the dimension, a : or range keeps the dimension.
+
+How much microbenchmarking value is there in setting a temporary variable equal to a view if the view is reused?  or will the compiler do it for me?  Or does it matter enough?
+
+Change the layer functions to use the batch_size variable:
+
+conv forward:  need range and stop.  DONE
+conv backward: same. DONE
+linear forward: views on arrays with range.  DONE
+linear backward: views on arrays with range, loop range. DONE
+maxpool forward: need stop only. DONE
+maxpool backward: need stop only. DONE
+flatten forward: might not need any change at all. DONE
+flatten backward: need range and stop.  DONE
+batchnorm forward: need range and stop. tricky to replace 
+	linear  DONE
+	conv    DONE
+batchnorm backward: need to provide new slicing for array 
+references, using range
+	linear  DONE
+	conv    DONE
+
+Look at each activation. Theoretically, we could do activation 
+   function on cells we won't use. But, there could be some slight 
+   performance advantage of only calculating the values we use.
+setup the calls and inputs.
+relu!: loop ranges. DONE
+relu_grad!: loop ranges. DONE
+leaky_relu!, leaky_relu_grad!: DONE
+
+**logistic!**: possibly replace broadcast with loop->then loop range
+regression: probably need ranges. assume dense only?
+
+Look at each cost function for use of array sizes:
+dloss_dz!: need ranges,  replaces broadcasting with loop  DONE
+	passed in y is already a minibatch of the right size
+softmax: loop range    DONE
+**cross_entropy_cost**: depends on array sizes passed in:  not 	
+	using layer structs--don't know as depends on gather_stats!
+**mse_cost**: same
+

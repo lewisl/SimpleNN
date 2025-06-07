@@ -26,7 +26,7 @@ const ELT = Float32
 # 64 channels is not great
 one_conv = LayerSpec[
     inputlayerspec(h=28, w=28, outch=1, name=:input)
-    convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, padrule=:none, optimization=:adamw, normalization=:batchnorm)  # , normalization=:batchnorm  , optimization=:adamw
+    convlayerspec(outch=32, f_h=3, f_w=3, name=:conv1, activation=:relu, padrule=:same, optimization=:adamw, normalization=:batchnorm)  # , normalization=:batchnorm  , optimization=:adamw
     maxpoollayerspec(name=:maxpool1, f_h=2, f_w=2)
     flattenlayerspec(name=:flatten)
     linearlayerspec(outputdim=200, activation=:relu, name=:linear1,  optimization=:adamw, normalization=:batchnorm)   # , normalization=:batchnorm
@@ -78,8 +78,8 @@ three_linear = LayerSpec[
 
 preptest = true
 full_batch = 60_000
-minibatch_size = 50
-epochs = 10
+minibatch_size = 47
+epochs = 2
 layerspecs = one_conv
 
 # for le_net lr=ELT(0.0003) epochs = 5  reg=:none (until things work...)

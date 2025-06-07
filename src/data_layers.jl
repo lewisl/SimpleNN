@@ -217,7 +217,6 @@ Base.@kwdef struct ConvLayer <: Layer
     pad::Int64
     stride::Int64
     dobias::Bool
-    # doslice::Bool
     isoutput::Bool
 end
 

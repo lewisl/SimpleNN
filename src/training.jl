@@ -3,6 +3,7 @@ TODO
 
 - test regression
 - make stats struct immutable
+- logistic as sigmoid activation and gradient
 
 
 =#
@@ -257,25 +258,29 @@ end
 # Training Loop
 # ============================
 
-function feedforward!(layers::Vector{<:Layer}, x)
-    layers[begin].a .= x
+function feedforward!(layers::Vector{<:Layer}, x, current_batch_size)
+    cb = current_batch_size
+    cb_rng = 1:cb
+    va = slice_minibatch(layers[begin].a, cb_rng)
+    @turbo va .= x
     @inbounds for (i, lr) in zip(2:length(layers), layers[2:end])  # assumes that layers[1] MUST be input layer without checking!   
         # lr.mb_rng[] = mb_rng    # update the layer's value for minibatch range
-        lr(layers[i-1].a)  # dispatch on type of lr
+        lr(layers[i-1].a, cb)  # dispatch on type of lr
     end
     return
 end
 
-function backprop!(layers::Vector{<:Layer}, y)
+function backprop!(layers::Vector{<:Layer}, y, current_batch_size)
+    cb = current_batch_size
     # output layer is different
-    dloss_dz!(layers[end], y)
+    dloss_dz!(layers[end], y, cb)
     # layers[end].mb_rng[] = mb_rng  # update the layer's value for minibatch range
-    layers[end](layers[end-1])   # calls layer function for backward pass, passes layers[end] and layers[end-1]
+    layers[end](layers[end-1], cb)   # calls layer function for backward pass, passes layers[end] and layers[end-1]
 
     nlayers = length(layers)  # skip over output layer (end) and input layer (begin)
     @inbounds @views for (i, lr) in zip((nlayers-1):-1:2, reverse(layers[begin+1:end-1]))
         # lr.mb_rng[] = mb_rng   # update the layer's value for minibatch range
-        lr(layers[i+1])
+        lr(layers[i+1], current_batch_size)
     end
     return
 end
@@ -406,7 +411,7 @@ function train!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size=0, h
                 error("Minibatch_size too large with fewer than 3 batches. Choose a much smaller minibatch_size.")
             end
 
-    stats = allocate_stats(full_batch, minibatch_size, epochs)
+    hp.do_stats && (stats = allocate_stats(full_batch, minibatch_size, epochs))
     batch_counter = 0
     last_batch = rem(full_batch, minibatch_size)
 
@@ -417,7 +422,6 @@ function train!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size=0, h
         current_batch_size = minibatch_size
 
         @inbounds while samples_left > 0 
-
             if dobatch
                 if samples_left > minibatch_size  # continue
                     start_obs = end_obs + 1
@@ -444,18 +448,19 @@ function train!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size=0, h
             print("counter = ", batch_counter, "\r")
             flush(stdout)
 
-            feedforward!(layers, x_part)
+            feedforward!(layers, x_part, current_batch_size)
 
-            backprop!(layers, y_part)
+            backprop!(layers, y_part, current_batch_size)
 
             update_weight_loop!(layers, hp, batch_counter)
 
-            hp.do_stats && gather_stats!(stats, layers, y_part, batch_counter, batno, e; to_console=false)
+            hp.do_stats && (gather_stats!(stats, layers, y_part, batch_counter, batno, e; to_console=false))
 
         end
     end
 
-    return stats
+    hp.do_stats && return stats
+    return
 end
 
 
@@ -499,34 +504,36 @@ function minibatch_prediction(layers::Vector{Layer}, x, y, costfunc=cross_entrop
     # loop control and counters
     samples_left = full_batch
     start_obs = end_obs = 0
-    loop = true
+    current_batch_size = minibatch_size
+    cb_rng = 1:current_batch_size
     batch_counter = 0
 
-    @inbounds while loop
+    @inbounds while samples_left > 0
         if samples_left > minibatch_size  # continue
             start_obs = end_obs + 1
             end_obs = start_obs + minibatch_size - 1
-            n_samples = minibatch_size
-        else   # stop after this iteration setting the stop flag
+        else   
             start_obs = end_obs + 1
             end_obs = start_obs + samples_left - 1
-            loop = false
-            n_samples = samples_left
+            current_batch_size = samples_left
+            cb_rng = 1:current_batch_size
         end
-        x_part = slice_minibatch(x, start_obs:end_obs)
-        y_part = slice_minibatch(y, start_obs:end_obs)
+        mb_rng = start_obs:end_obs
+        x_part = slice_minibatch(x, mb_rng)
+        y_part = slice_minibatch(y, mb_rng)
         samples_left -= minibatch_size  # update the effective loop counter
 
         batch_counter += 1
 
-        feedforward!(layers, x_part)
+        feedforward!(layers, x_part, current_batch_size)
 
         # stats per batch: can't use x_part because that is input, layer 1
-        @views preds .= layers[end].a
-        targets .= y_part
+        # @views preds .= layers[end].a[:, mb_rng]
+        preds = slice_minibatch(layers[end].a, cb_rng)
+        @turbo targets .= y_part
 
         (correct_count, total_samples) = accuracy_count(preds, targets)
-        cost = costfunc(preds, targets, n_samples)
+        cost = costfunc(preds, targets, current_batch_size)
         total_correct += correct_count
         total_cnt += total_samples
         total_cost += cost
@@ -537,7 +544,7 @@ end
 
 function prediction(predlayers::Vector{<:Layer}, x_input, y_input)
     n_samples = size(x_input, ndims(x_input))
-    feedforward!(predlayers, x_input)
+    feedforward!(predlayers, x_input, n_samples)
     preds = predlayers[end].a
     acc = accuracy(preds, y_input)
     cost = cross_entropy_cost(preds, y_input, n_samples)
