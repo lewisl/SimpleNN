@@ -65,3 +65,59 @@ softmax: loop range    DONE
 	using layer structs--don't know as depends on gather_stats!
 **mse_cost**: same
 
+
+Considering another approach.  Which arrays must have views by layer type:
+
+Conv
+- a_below
+- pad_a_below
+- x (can't do in the struct)
+- pad_x
+- z
+- z_norm
+- eps_l
+- grad_a
+- pad_above_eps
+- a
+
+Linear
+- z
+- z_norm
+- x  (can't do in struct--unless we can use a view from another layer
+- a_below
+- eps_l
+- grad_a
+
+Maxpool
+- mask: not using view
+- a: not using view
+- eps: not using view
+
+Flatten
+- a: not using view
+- dl_flat
+- eps_l
+- a
+
+BatchNorm:  arrays are in corresponding layers
+	conv
+	- z_norm
+	- z
+	- eps_l_above
+
+	linear
+	- z_norm
+	- z
+	- eps_l
+	- pad_above_eps
+
+Which arrays must have views by activation function:
+
+relu, leaky_relu from input layers
+- a
+- z
+- grad_a
+
+softmax!
+- z: not using view
+- a: not using view

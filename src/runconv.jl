@@ -78,7 +78,7 @@ three_linear = LayerSpec[
 
 preptest = true
 full_batch = 60_000
-minibatch_size = 47
+minibatch_size = 64
 epochs = 2
 layerspecs = one_conv
 
@@ -138,7 +138,7 @@ y_single = y_train[:, samplenumber];
 y_single = reshape(y_single, :, 1);
 
 
-SimpleNN.feedforward!(pred1layers, x_single);
+SimpleNN.feedforward!(pred1layers, x_single, 1);
 pred1 = pred1layers[end].a;
 
 target_digit = SimpleNN.find_max_idx(y_single[:, 1]) - 1;

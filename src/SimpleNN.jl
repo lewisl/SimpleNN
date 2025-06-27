@@ -24,6 +24,7 @@ include("layer_functions.jl")
 include("modifiers.jl")
 include("training.jl")
 include("mnist_fun.jl")
+include("regr_fun.jl")
 
 # data structures for neural network
 export
@@ -47,6 +48,7 @@ export
 # functions you can use
 export
     setup_train,
+    lr_data,
     setup_mnist,
     allocate_layers,
     setup_preds,

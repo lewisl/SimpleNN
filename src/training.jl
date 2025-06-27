@@ -50,6 +50,7 @@ end
 
 function show_array_sizes(layer)
     println("name: ", layer.name)
+    println("kind: ", typeof(layer))
     println("arrays:")
     for p in fieldnames(typeof(layer))
         val = getfield(layer, p)
@@ -74,6 +75,7 @@ end
 function show_layer_specs(layers)
     for lr in layers
         println()
+
         show_array_sizes(lr)
         show_functions(lr)
         println()
@@ -261,7 +263,15 @@ end
 function feedforward!(layers::Vector{<:Layer}, x, current_batch_size)
     cb = current_batch_size
     cb_rng = 1:cb
-    va = slice_minibatch(layers[begin].a, cb_rng)
+
+    # @show size(layers[begin].a)
+
+
+    va = view_minibatch(layers[begin].a, cb_rng)
+
+    # @show size(va)
+    # @show size(x)
+
     @turbo va .= x
     @inbounds for (i, lr) in zip(2:length(layers), layers[2:end])  # assumes that layers[1] MUST be input layer without checking!   
         # lr.mb_rng[] = mb_rng    # update the layer's value for minibatch range
@@ -390,19 +400,21 @@ function update_weight_loop!(layers::Vector{<:Layer}, hp, counter)
 end
 
 # helpers for minibatch views in training loop: works when range is an Int or a UnitRange{Int}
-@inline function slice_minibatch(x::AbstractArray{T,2}, range) where T
+@inline function view_minibatch(x::AbstractArray{T,2}, range) where T
+    # @show size(x)
+    # @show range
     view(x, :, range)
 end
 
-@inline function slice_minibatch(x::AbstractArray{T,4}, range) where T  
+@inline function view_minibatch(x::AbstractArray{T,4}, range) where T  
     view(x, :, :, :, range)
 end
 
 
 function train!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size=0, hp=default_hp) where {L<:Layer}
 
-    dobatch = if minibatch_size == 0
-                false
+    dobatch = if minibatch_size == full_batch
+                false   # we are training on the full batch
             elseif minibatch_size <= 39
                 error("Minibatch_size too small.  Choose a larger minibatch_size.")
             elseif full_batch / minibatch_size > 3
@@ -411,9 +423,14 @@ function train!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size=0, h
                 error("Minibatch_size too large with fewer than 3 batches. Choose a much smaller minibatch_size.")
             end
 
-    hp.do_stats && (stats = allocate_stats(full_batch, minibatch_size, epochs))
+    hp.do_stats && (stats = allocate_stats(full_batch, minibatch_size, epochs))  # TODO this won't work with full batch training
     batch_counter = 0
-    last_batch = rem(full_batch, minibatch_size)
+@show minibatch_size
+    last_batch = if minibatch_size > 0
+            rem(full_batch, minibatch_size)
+        else
+            0
+        end
 
     for e = 1:epochs
         samples_left = full_batch
@@ -433,13 +450,14 @@ function train!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size=0, h
                     # loop = false
                 end
                 mb_rng = start_obs:end_obs
-                x_part = slice_minibatch(x, mb_rng)
-                y_part = slice_minibatch(y, mb_rng)
+                x_part = view_minibatch(x, mb_rng)
+                y_part = view_minibatch(y, mb_rng)
                 samples_left -= current_batch_size  # update the effective loop counter
             else
                 x_part = x
                 y_part = y
                 samples_left = 0   # completing all samples in one batch
+                current_batch_size = full_batch
                 # loop = false  # just do it once per epoch
             end
 
@@ -447,6 +465,8 @@ function train!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size=0, h
 
             print("counter = ", batch_counter, "\r")
             flush(stdout)
+
+            # @show size(x_part)
 
             feedforward!(layers, x_part, current_batch_size)
 
@@ -519,8 +539,8 @@ function minibatch_prediction(layers::Vector{Layer}, x, y, costfunc=cross_entrop
             cb_rng = 1:current_batch_size
         end
         mb_rng = start_obs:end_obs
-        x_part = slice_minibatch(x, mb_rng)
-        y_part = slice_minibatch(y, mb_rng)
+        x_part = view_minibatch(x, mb_rng)
+        y_part = view_minibatch(y, mb_rng)
         samples_left -= minibatch_size  # update the effective loop counter
 
         batch_counter += 1
@@ -529,7 +549,7 @@ function minibatch_prediction(layers::Vector{Layer}, x, y, costfunc=cross_entrop
 
         # stats per batch: can't use x_part because that is input, layer 1
         # @views preds .= layers[end].a[:, mb_rng]
-        preds = slice_minibatch(layers[end].a, cb_rng)
+        preds = view_minibatch(layers[end].a, cb_rng)
         @turbo targets .= y_part
 
         (correct_count, total_samples) = accuracy_count(preds, targets)

@@ -36,30 +36,36 @@ The tensor dimensions follow Julia's column-major convention: (height, width, ch
 """
 function (layer::ConvLayer)(x::AbstractArray{ELT,4}, current_batch_size::Int)
     cb = current_batch_size
+    mb = size(layer.z, 4)
     cb_rng = 1:cb
-    @views layer.a_below[:,:,:,cb_rng] .= x[:,:,:,cb_rng]   # as an alias, this might not work for backprop though it seems to
+    if mb == cb
+        a_below = layer.a_below
+        pad_x = layer.pad_x
+        z = layer.z
+    else
+        a_below = view(layer.a_below, :,:,:, cb_rng)
+        x = view(x, :, :, :, cb_rng)  # don't need a non-view of x because it's an input we don't pull from the layer variable
+        pad_x = view(layer.pad_x, :, :, :, cb_rng)
+        z = view(layer.z, :,:,:, cb_rng)
+    end
+
+    a_below .= x
     pad = layer.pad
-    # mb_rng = layer.mb_rng[]
-
-    # @show size(layer.pad_x)
-    # @show size(x)
-
 
     if layer.padrule == :same 
-        # the padded input is better than the input: duh!
-        @views layer.pad_x[begin+pad:end-pad, begin+pad:end-pad, :, cb_rng] .= x[:,:,:,cb_rng]
-        use_x = view(layer.pad_x, :,:,:,cb_rng)    # no allocation
+        @turbo @views pad_x[begin+pad:end-pad, begin+pad:end-pad, :, :] .= x
+        use_x = pad_x  # use_x is a "selector" alias
     else
-        @views use_x = x[:,:,:,cb_rng]   # no allocation
+        use_x = x
     end
 
     # initialize output z with 0.0f0 if nobias or with bias: when dobias==false, layer.bias remains as initialized to zeros
     if layer.dobias
         for oc in axes(layer.z, 3)
-            @turbo layer.z[:, :, oc, cb_rng] .= layer.bias[oc]  # appropriate bias inserted in each element
+            @turbo z[:,:,oc, :] .= layer.bias[oc]
         end
     else
-        @turbo fill!(layer.z, ELT(0.0))  # all initialized to zero, 1/2x time of inserting bias
+        @turbo fill!(z, ELT(0.0))  # all initialized to zero, 1/2x time of inserting bias    layer.z
     end
 
     # Combine bias initialization with convolution in a single pass
@@ -70,8 +76,8 @@ function (layer::ConvLayer)(x::AbstractArray{ELT,4}, current_batch_size::Int)
                     for ic in axes(layer.weight, 3)  # input channels
                         for fh in axes(layer.weight, 1)  # filter height
                             for fw in axes(layer.weight, 2)  # filter width
-                                layer.z[i, j, oc, b] += use_x[i+fh-1, j+fw-1, ic, b] *   # layer.pad_x
-                                                        layer.weight[fh, fw, ic, oc]
+                                z[i, j, oc, b] += use_x[i+fh-1, j+fw-1, ic, b] *   #   layer.z   layer.pad_x
+                                                layer.weight[fh, fw, ic, oc]
                             end
                         end
                     end
@@ -113,9 +119,18 @@ function (layer::ConvLayer)(layer_above, current_batch_size::Int)
     cb = current_batch_size
     cb_rng = 1:cb
     f_h, f_w, ic, oc = size(layer.weight)
-    H_out, W_out, _, _ = size(layer.eps_l)
-    # mb_rng = layer.mb_rng[]
-
+    H_out, W_out, _, mb = size(layer.eps_l)
+    if mb == cb
+        eps_l = layer.eps_l
+        grad_a = layer.grad_a
+        pad_above_eps = layer.pad_above_eps
+        eps_l_above = layer_above.eps_l
+    else
+        eps_l = view(layer.eps_l, :,:,:, cb_rng)
+        grad_a = view(layer.grad_a, :,:,:, cb_rng)
+        pad_above_eps = view(layer.pad_above_eps, :,:,:, cb_rng)
+        eps_l_above = view(layer_above.eps_l, :,:,:, cb_rng)
+    end
 
     fill!(layer.grad_weight, ELT(0.0))  # reinitialization to allow accumulation of convolutions
     fill!(layer.eps_l, ELT(0.0))
@@ -124,7 +139,7 @@ function (layer::ConvLayer)(layer_above, current_batch_size::Int)
 
     layer.activation_gradf(layer, current_batch_size)
 
-    @views layer_above.eps_l[:,:,:, cb_rng] .*= layer.grad_a[:,:,:, cb_rng]
+    eps_l_above .*= grad_a
 
     pad = layer.pad
 
@@ -140,9 +155,9 @@ function (layer::ConvLayer)(layer_above, current_batch_size::Int)
         padh = div(belowh - thish, 2)
         padw = div(beloww - thisw, 2)
         # @show padh, padw
-        @views layer.pad_above_eps[begin+padh:end-padh, begin+padw:end-padw, :, cb_rng] .= layer_above.eps_l[:,:,:, cb_rng]
+        @views pad_above_eps[begin+padh:end-padh, begin+padw:end-padw, :, :] .= eps_l_above
     elseif layer.padrule == :same
-        @views layer.pad_above_eps[:,:,:, cb_rng] .= layer_above.eps_l[:,:,:, cb_rng]
+        pad_above_eps .= eps_l_above
     end
 
     layer.normalization_gradf(layer, layer_above, current_batch_size) # either noop or batchnorm_grad! TODO: should this receive the layer_above as input????
@@ -169,19 +184,28 @@ function (layer::ConvLayer)(layer_above, current_batch_size::Int)
     cb = current_batch_size
 
     if layer.dobias   
-        @views layer.grad_bias .= reshape(sum(layer_above.eps_l[:,:,:, :], dims=(1, 2, 4)), oc) .* inverse_n_samples
+        layer.grad_bias .= reshape(sum(eps_l_above, dims=(1, 2, 4)), oc) .* inverse_n_samples
     end
 
     return     # nothing
 end
 
+
 function compute_grad_weight!(layer, inverse_n_samples, current_batch_size)
-    H_out, W_out, _, _ = size(layer.eps_l)
+    H_out, W_out, _, mb = size(layer.eps_l)
     cb = current_batch_size
     cb_rng = 1:cb
-    # mb_rng = layer.mb_rng[]
-
-
+    if mb == cb
+        eps_l = layer.eps_l
+        grad_weight = layer.grad_weight
+        a_below = layer.a_below
+        pad_a_below = layer.pad_a_below
+    else
+        eps_l = view(layer.eps_l, :,:,:, cb_rng)
+        grad_weight = view(layer.grad_weight, :,:,:, cb_rng)
+        a_below = view(layer.a_below, :,:,:, cb_rng)
+        pad_a_below = view(layer.pad_a_below, :,:,:, cb_rng)
+    end
     # @show size(layer.pad_a_below)
     # @show size(layer.a_below)
 
@@ -189,16 +213,16 @@ function compute_grad_weight!(layer, inverse_n_samples, current_batch_size)
     fill!(layer.grad_weight, ELT(0.0)) # no allocations; faster than assignment
     if layer.padrule == :same  # remarkably, this works
         pad = layer.pad
-        @views layer.pad_a_below[begin+pad:end-pad, begin+pad:end-pad, :, cb_rng] .= layer.a_below[:,:,:, cb_rng]   
-        @views use_a_below = layer.a_below[:,:,:, cb_rng]    # no allocation
+        @views pad_a_below[begin+pad:end-pad, begin+pad:end-pad, :, :] .= a_below 
+        use_a_below = a_below   # no allocation
     else  # when padding is :none (e.g., 0) then ...
-        @views use_a_below = layer.a_below[:,:,:, cb_rng]   # set alias to a_below to use in loop below.  no allocation
+        use_a_below = a_below   # set alias to a_below to use in loop below.  no allocation
     end
 
     # Use @views to avoid copying subarrays
-    @inbounds for oc in axes(layer.eps_l, 3)      # 1:out_channels
+    @inbounds for oc in axes(eps_l, 3)      # 1:out_channels
         # View of the error for this output channel (all spatial positions, all batches)
-        err = @view layer.eps_l[:, :, oc, cb_rng]      # size H_out × W_out × batch_size
+        err = @view eps_l[:, :, oc, :]      # size H_out × W_out × batch_size
 
         # @show size(err)
         # @show size(layer.weight)
@@ -208,7 +232,7 @@ function compute_grad_weight!(layer, inverse_n_samples, current_batch_size)
             # View of the input activation for this channel
             # (We'll slide this view for each filter offset)
 
-            input_chan = @view use_a_below[:, :, ic, cb_rng]   # size H_in × W_in × batch_size
+            input_chan = @view use_a_below[:, :, ic, :]   # size H_in × W_in × batch_size
             # @show size(input_chan)
             for fj in axes(layer.weight, 2)
                 for fi in axes(layer.weight, 1)
@@ -445,19 +469,31 @@ for bias addition to minimize memory allocations.
 function (layer::LinearLayer)(x::Matrix{ELT}, current_batch_size::Int)
     cb = current_batch_size
     cb_rng = 1:cb
-    # mb_rng = layer.mb_rng[]        # TODO do we need to slice x or does it come in the right size as a SubArray?
-    @views mul!(layer.z[:, cb_rng], layer.weight, x[:, cb_rng])  # in-place matrix multiplication
+    mb = size(layer.z, 2)
+    if cb == mb  # no views: pre-allocated layer arrays are sized for standard minibatch
+        z = layer.z  # no cost to setting an alias to existing memory
+        x = x
+        a_below = layer.a_below
+    else   # use views for the last minibatch if it is fraction of standard
+        z = view(layer.z, :, cb_rng)  # TODO we really only need to do this once for a given layer
+        x = view(x, :, cb_rng)
+        a_below = view(layer.a_below, :, cb_rng)
+    end
+    # @views mul!(layer.z[:, cb_rng], layer.weight, x[:, cb_rng])  # in-place matrix multiplication
+    mul!(z, layer.weight, x) 
 
     # bias: explicit loop faster than broadcasting
     if layer.dobias
         @turbo for j in cb_rng   # axes(layer.z, 2)   #   mb_rng # For each column (sample)
             for i in axes(layer.z, 1)  # For each row (output neuron)
-                layer.z[i, j] += layer.bias[i]
+                # layer.z[i, j] += layer.bias[i]
+                z[i,j] += layer.bias[i]
             end
         end
     end
 
-    @views layer.a_below[:, cb_rng] .= x[:, cb_rng]   # assign alias for using in backprop
+    # @views layer.a_below[:, cb_rng] .= x[:, cb_rng]   # assign alias for using in backprop
+    @turbo a_below .= x
 
     layer.normalizationf(layer, current_batch_size) # either batchnorm! or noop
 
@@ -486,27 +522,35 @@ errors to lower layers).
 This implementation handles both output and hidden layers differently, applying
 appropriate activation gradients and normalization gradients as needed.
 """
-function (layer::LinearLayer)(layer_above::LinearLayer, current_batch_size::Int)
-    # mb_rng =  layer.mb_rng[]
+function (layer::LinearLayer)(layer_above::Union{LinearLayer, InputLayer}, current_batch_size::Int)  # layer_above::LinearLayer
+    # for the outputlayer, layer_above is actually layer below
+    # TODO it might be nice to have a separate method for the output layer: how to dispatch on it?
     cb = current_batch_size
     cb_rng = 1:cb
-    # n_samples =  size(layer.eps_l, 2)  # size(layer.eps_l, 2)  length(mb_rng)
+    mb = size(layer.eps_l,2)
+    if cb == mb  # just deref arrays in layer struct 
+        eps_l = layer.eps_l
+        a_below = layer.a_below
+        layer.isoutput || (eps_l_above = layer_above.eps_l)
+        grad_a = layer.grad_a
+    else  # use views for the last minibatch 
+        eps_l = view(layer.eps_l, :, cb_rng)
+        a_below = view(layer.a_below, :, cb_rng)
+        layer.isoutput || (eps_l_above = view(layer_above.eps_l, :, cb_rng))
+        grad_a = view(layer.grad_a, :, cb_rng)
+    end
     inverse_n_samples = ELT(1.0) / ELT(cb)
     if layer.isoutput
-        # layer.eps_l calculated by prior call to dloss_dz
-        # @show size(layer.grad_weight[:, mb_rng])
-        # @show size(layer.eps_l[:, mb_rng])
-        # @show size(layer.a_below[:, mb_rng]')
-        @views mul!(layer.grad_weight, layer.eps_l[:, cb_rng], layer.a_below[:,cb_rng]')  # in-place matrix multiplication
-        layer.grad_weight .*= inverse_n_samples  # in-place scaling
+        mul!(layer.grad_weight, eps_l, a_below')
+        @turbo layer.grad_weight .*= inverse_n_samples  # in-place scaling
     else  # this is hidden layer
         layer.activation_gradf(layer, current_batch_size)  # calculates layer.grad_a
-        @views mul!(layer.eps_l[:, cb_rng], layer_above.weight', layer_above.eps_l[:, cb_rng])  # in-place matrix multiplication
-        @views layer.eps_l[:, cb_rng] .*= layer.grad_a[:, cb_rng]  # in-place element-wise multiplication
+        mul!(eps_l, layer_above.weight', eps_l_above)
+        @turbo eps_l .*= grad_a
 
         layer.normalization_gradf(layer, current_batch_size) # either noop or batchnorm_grad!
 
-        @views mul!(layer.grad_weight, layer.eps_l[:, cb_rng], layer.a_below[:, cb_rng]')  # in-place matrix multiplication
+        mul!(layer.grad_weight, eps_l, a_below')
         layer.grad_weight .*= inverse_n_samples # in-place scaling
     end
 
@@ -520,5 +564,5 @@ function (layer::LinearLayer)(layer_above::LinearLayer, current_batch_size::Int)
         end
         layer.grad_bias .*= inverse_n_samples  # in-place scaling
     end
-    return     # nothing
+    return     
 end
