@@ -318,89 +318,23 @@ end
 =#
 
 function update_weights!(layer::Layer, hp, t)
-    if isa(layer.optparams, AdamParam)   # Adam/AdamW optimization
-        ad = layer.optparams
-        pre_adam!(layer, ad, t)
-        b1_divisor = ELT(1.0) / (ELT(1.0) - ad.b1^t)
-        b2_divisor = ELT(1.0) / (ELT(1.0) - ad.b2^t)
-
-        # Update weights with @turbo for better performance
-        @turbo for i in eachindex(layer.weight)
-            # Base Adam update term: avoids allocation by using scalars in the loop
-            adam_term = (layer.grad_m_weight[i] * b1_divisor) / (sqrt(layer.grad_v_weight[i] * b2_divisor) + IT)
-            layer.weight[i] -= hp.lr * adam_term
-        end
-
-        # Apply regularization and weight decay outside @turbo
-        if hp.reg == :L1
-            @turbo for i in eachindex(layer.weight)
-                layer.weight[i] -= hp.lr * hp.regparm * sign(layer.weight[i])
-            end
-        elseif hp.reg == :L2
-            @turbo for i in eachindex(layer.weight)
-                layer.weight[i] -= hp.lr * hp.regparm * layer.weight[i]
-            end
-        end
-
-        # Apply weight decay if needed
-        if ad.decay > 0
-            @turbo for i in eachindex(layer.weight)
-                layer.weight[i] -= hp.lr * ad.decay * layer.weight[i]
-            end
-        end
-
-        # Update biases with @turbo
-        if layer.dobias
-            @turbo for i in eachindex(layer.bias)
-                adam_term = (layer.grad_m_bias[i] * b1_divisor) / (sqrt(layer.grad_v_bias[i] * b2_divisor) + IT)
-                layer.bias[i] -= hp.lr * adam_term
-            end
-        end
-
-        # Update batch normalization parameters if present
-        if isa(layer.normparams, BatchNorm)
-            bn = layer.normparams
-            pre_adam_batchnorm!(bn, ad, t)
-
-            # Update gamma (scale) parameter and beta (shift parameter)
-            @turbo for i in eachindex(bn.gam)
-                adam_term_gam = (bn.grad_m_gam[i] * b1_divisor) / (sqrt(bn.grad_v_gam[i] * b2_divisor) + IT)
-                bn.gam[i] -= hp.lr * adam_term_gam
-
-                adam_term_bet = (bn.grad_m_bet[i] * b1_divisor) / (sqrt(bn.grad_v_bet[i] * b2_divisor) + IT)
-                bn.bet[i] -= hp.lr * adam_term_bet
-            end
-        end
-    else  # SGD update with no optimization
-        @turbo for i in eachindex(layer.weight)
-            layer.weight[i] -= hp.lr * layer.grad_weight[i]
-        end
-
-        # Apply regularization outside @turbo
-        if hp.reg == :L1
-            @turbo for i in eachindex(layer.weight)
-                layer.weight[i] -= hp.lr * hp.regparm * sign(layer.weight[i])
-            end
-        elseif hp.reg == :L2
-            @turbo for i in eachindex(layer.weight)
-                layer.weight[i] -= hp.lr * hp.regparm * layer.weight[i]
-            end
-        end
-
-        # Simple SGD update if not using Adam/AdamW
-        if layer.normparams isa BatchNorm
-            bn = layer.normparams
-            @turbo for i in eachindex(bn.gam)
-                bn.gam[i] -= hp.lr * bn.grad_gam[i]
-                bn.bet[i] -= hp.lr * bn.grad_bet[i]
-            end
-        end
-
-        if layer.dobias
-            @turbo for i in eachindex(layer.bias)
-                layer.bias[i] -= hp.lr * layer.grad_bias[i]
-            end
-        end
+    if isa(layer.optparams, AdamParam)
+        # Core optimizer updates - all Adam-specific logic moved into helpers
+        update_weights_adam!(layer, hp, t)
+        update_bias_adam!(layer, hp, t)
+        update_batchnorm_adam!(layer, hp, t)
+        
+        # Regularization and weight decay
+        apply_regularization!(layer, hp)
+        apply_weight_decay!(layer, hp, layer.optparams.decay)
+    else
+        # Core SGD updates
+        update_weights_sgd!(layer, hp)
+        update_bias_sgd!(layer, hp)
+        update_batchnorm_sgd!(layer, hp)
+        
+        # Regularization
+        apply_regularization!(layer, hp)
     end
 end
 
@@ -414,17 +348,108 @@ function update_weight_loop!(layers::Vector{<:Layer}, hp, counter)
     end
 end
 
-# helpers for minibatch views in training loop: works when range is an Int or a UnitRange{Int}
-@inline function view_minibatch(x::AbstractArray{T,2}, range) where T
-    # @show size(x)
-    # @show range
-    view(x, :, range)
+
+# ============================
+# Helper functions for regularization and weight decay
+# ============================
+
+function apply_regularization!(layer::Layer, hp)
+    if hp.reg == :L1
+        @turbo for i in eachindex(layer.weight)
+            layer.weight[i] -= hp.lr * hp.regparm * sign(layer.weight[i])
+        end
+    elseif hp.reg == :L2
+        @turbo for i in eachindex(layer.weight)
+            layer.weight[i] -= hp.lr * hp.regparm * layer.weight[i]
+        end
+    end
 end
 
-@inline function view_minibatch(x::AbstractArray{T,4}, range) where T  
-    view(x, :, :, :, range)
+function apply_weight_decay!(layer::Layer, hp, decay)
+    if decay > 0
+        @turbo for i in eachindex(layer.weight)
+            layer.weight[i] -= hp.lr * decay * layer.weight[i]
+        end
+    end
 end
 
+# ============================
+# Helper functions for Adam optimizer
+# ============================
+
+function update_weights_adam!(layer::Layer, hp, t)
+    ad = layer.optparams
+    pre_adam!(layer, ad, t)
+    b1_divisor = ELT(1.0) / (ELT(1.0) - ad.b1^t)
+    b2_divisor = ELT(1.0) / (ELT(1.0) - ad.b2^t)
+    
+    @turbo for i in eachindex(layer.weight)
+        layer.weight[i] -= hp.lr * ((layer.grad_m_weight[i] * b1_divisor) / (sqrt(layer.grad_v_weight[i] * b2_divisor) + IT))
+    end
+end
+
+function update_bias_adam!(layer::Layer, hp, t)
+    layer.dobias || return  # Early return if no bias
+    
+    ad = layer.optparams
+    b1_divisor = ELT(1.0) / (ELT(1.0) - ad.b1^t)
+    b2_divisor = ELT(1.0) / (ELT(1.0) - ad.b2^t)
+    
+    @turbo for i in eachindex(layer.bias)
+        adam_term = (layer.grad_m_bias[i] * b1_divisor) / (sqrt(layer.grad_v_bias[i] * b2_divisor) + IT)
+        layer.bias[i] -= hp.lr * adam_term
+    end
+end
+
+function update_batchnorm_adam!(layer::Layer, hp, t)
+    isa(layer.normparams, BatchNorm) || return  # Early return if no batch norm
+    
+    ad = layer.optparams
+    bn = layer.normparams
+    pre_adam_batchnorm!(bn, ad, t)
+    b1_divisor = ELT(1.0) / (ELT(1.0) - ad.b1^t)
+    b2_divisor = ELT(1.0) / (ELT(1.0) - ad.b2^t)
+    
+    @turbo for i in eachindex(bn.gam)
+        adam_term_gam = (bn.grad_m_gam[i] * b1_divisor) / (sqrt(bn.grad_v_gam[i] * b2_divisor) + IT)
+        bn.gam[i] -= hp.lr * adam_term_gam
+        
+        adam_term_bet = (bn.grad_m_bet[i] * b1_divisor) / (sqrt(bn.grad_v_bet[i] * b2_divisor) + IT)
+        bn.bet[i] -= hp.lr * adam_term_bet
+    end
+end
+
+# ============================
+# Helper functions for SGD optimizer
+# ============================
+
+function update_weights_sgd!(layer::Layer, hp)
+    @turbo for i in eachindex(layer.weight)
+        layer.weight[i] -= hp.lr * layer.grad_weight[i]
+    end
+end
+
+function update_bias_sgd!(layer::Layer, hp)
+    layer.dobias || return  # Early return if no bias
+    
+    @turbo for i in eachindex(layer.bias)
+        layer.bias[i] -= hp.lr * layer.grad_bias[i]
+    end
+end
+
+function update_batchnorm_sgd!(layer::Layer, hp)
+    isa(layer.normparams, BatchNorm) || return  # Early return if no batch norm
+    
+    bn = layer.normparams
+    @turbo for i in eachindex(bn.gam)
+        bn.gam[i] -= hp.lr * bn.grad_gam[i]
+        bn.bet[i] -= hp.lr * bn.grad_bet[i]
+    end
+end
+
+# ============================
+# update weights and optimization
+# ============================
 
 function train!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size=0, hp=default_hp) where {L<:Layer}
 
@@ -624,3 +649,18 @@ end
 #     end
 #     return outlayers
 # end
+
+# ============================
+# update weights and optimization
+# ============================
+
+# helpers for minibatch views in training loop: works when range is an Int or a UnitRange{Int}
+@inline function view_minibatch(x::AbstractArray{T,2}, range) where T
+    # @show size(x)
+    # @show range
+    view(x, :, range)
+end
+
+@inline function view_minibatch(x::AbstractArray{T,4}, range) where T  
+    view(x, :, :, :, range)
+end

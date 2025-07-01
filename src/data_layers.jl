@@ -278,7 +278,7 @@ function ConvLayer(lr::LayerSpec, prevlayer, n_samples)
     end
 
     if (lr.optimization == :adam) | (lr.optimization == :adamw)
-        optparams = AdamParam(b1=0.9, b2=0.999, decay=0.01)
+        optparams = AdamParam(b1=ELT(0.9), b2=ELT(0.999), decay=ELT(0.01))
     elseif lr.optimization == :none
         optparams = NoOpt()
     else
@@ -442,7 +442,7 @@ function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
     end
 
     if (lr.optimization == :adam) | (lr.optimization == :adamw)
-        optparams = AdamParam(b1=0.9, b2=0.999, decay=0.01)
+        optparams = AdamParam(b1=0.9, b2=0.999, decay=0.01f0)
         optimization = lr.optimization
     elseif lr.optimization == :none
         optparams = NoOpt()

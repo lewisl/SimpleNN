@@ -9,6 +9,7 @@ module SimpleNN
 
 const ELT = Float32   # ELT for element type, Float32 or Float64
 const IT = 1f-12   # IT for itty bitty
+const ZT = 0f0
 
 using Random
 using LinearAlgebra
