@@ -28,9 +28,9 @@ Base.@kwdef struct BatchNorm{T<:AbstractArray} <: NormParam  # can this work for
     istraining::Ref{Bool} = true     # set to false for inference or prediction
 end
 
-struct NoNorm <: NormParam
+struct NoNorm <: NormParam  # a noop struct when not doing Batch Normalization
     @inline NoNorm() = new()   # help compiler elide any call to empty constructor
-end   # a noop struct when not doing Batch Normalization
+end   
 
 
 function batchnorm!(layer::LinearLayer, current_batch_size::Int)
@@ -344,9 +344,9 @@ Base.@kwdef struct AdamParam <: OptParam
     decay::ELT  # for AdamW, often called lambda
 end
 
-struct NoOpt <: OptParam
+struct NoOpt <: OptParam  # a noop struct when not doing any optimization
     @inline NoOpt() = new()   # help compiler elide any call to empty constructor
-end   # a noop struct when not doing Batch Normalization
+end   
 
 
 # calculates the momentum 'm' and the root mean square 'v' term for adam and adamw
@@ -368,7 +368,7 @@ end
     b1_term = ELT(1.0) - (ad.b1)^t
     b2_term = ELT(1.0) - (ad.b2)^t
 
-    # Use @turbo for better performance
+    # Use @turbo for better performance: running averages
     @turbo for i in eachindex(grad_m_lrparam)
         grad_m_lrparam[i] = ad.b1 * grad_m_lrparam[i] + b1_term * grad_lrparam[i]
         grad_v_lrparam[i] = ad.b2 * grad_v_lrparam[i] + b2_term * grad_lrparam[i]^2

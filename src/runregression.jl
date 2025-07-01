@@ -28,11 +28,11 @@ linear_reg1 = LayerSpec[
 ];
 
 
-linear_wrong = LayerSpec[
-    inputlayerspec(outputdim=1, name=:input)
-    linearlayerspec(outputdim=1, name=:linear1)
-    outputlayerspec(outputdim=1, activation=:regression, name=:output)
-];
+# linear_wrong = LayerSpec[
+#     inputlayerspec(outputdim=1, name=:input)
+#     linearlayerspec(outputdim=1, name=:linear1)
+#     outputlayerspec(outputdim=1, activation=:regression, name=:output)
+# ];
 
 # %%   some hyperparameters
 
@@ -86,7 +86,7 @@ minibatch_prediction(predlayerstrain, x_train, y_train)
 # %% predict with testset
 
 predlayerstest = setup_preds(layerspecs, layers, minibatch_size);
-minibatch_prediction(predlayerstest, x_test, y_test)
+minibatch_prediction(predlayerstest, x_test, y_test, mse_cost)
 
 
 # %% full batch prediction on test set, much slower  -- to verify that minibatch_prediction produces same result
@@ -96,26 +96,3 @@ prediction(predlayerstestfull, x_test, y_test)
 
 
 # %% predict a single example
-
-samplenumber = 200;
-
-pred1layers = setup_preds(layerspecs, layers, 1);
-
-x_single = x_train[:, :, :, samplenumber];
-x_single = reshape(x_single, 28, 28, 1, 1);
-
-y_single = y_train[:, samplenumber];
-y_single = reshape(y_single, :, 1);
-
-
-SimpleNN.feedforward!(pred1layers, x_single, 1);
-pred1 = pred1layers[end].a;
-
-target_digit = SimpleNN.find_max_idx(y_single[:, 1]) - 1;
-pred_digit = SimpleNN.find_max_idx(pred1[:, 1]) - 1;
-
-println("\nTarget digit: ", target_digit, "  Predicted digit: ", pred_digit)
-
-# %%  # display the selected digit
-
-display_mnist_digit(x_single)

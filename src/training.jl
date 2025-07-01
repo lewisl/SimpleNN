@@ -1,9 +1,17 @@
 #=
 TODO
 
-- test regression
 - make stats struct immutable
-- logistic as sigmoid activation and gradient
+- test logistic as sigmoid activation and gradient
+- use mse_cost for regression
+- implement prediction for regression
+- implement anova for regression
+- is there any real point to using regularization in the cost
+    calculation when cost is not directly used in backprop?
+    A: only if printing cost progress during training and for training progress
+        statistics
+- hide the minibatch complexity in a function
+- split apart update weights mess
 
 
 =#
@@ -227,7 +235,7 @@ end
 # ============================
 
 
-function cross_entropy_cost(pred::AbstractMatrix{ELT}, target::AbstractMatrix{ELT}, n_samples)
+function cross_entropy_cost(pred::AbstractMatrix{ELT}, target::AbstractMatrix{ELT}, n_samples, training=false)
     # this may not be obvious, but it is a non-allocating version
     n = n_samples
     log_sum1 = ELT(0.0)
@@ -247,11 +255,13 @@ function cross_entropy_cost(pred::AbstractMatrix{ELT}, target::AbstractMatrix{EL
 end
 
 
-function mse_cost(targets, predictions, n, theta=[], lambda=ELT(1.0), reg="", output_layer=3)
+function mse_cost(targets, predictions, n, istraining = false, theta=[], lambda=ELT(1.0), reg="", output_layer=2)
     @fastmath cost = (ELT(1.0) / (ELT(2.0) * n)) .* sum((targets .- predictions) .^ ELT(2.0))
-    @fastmath if reg == "L2"  # set reg="" if not using regularization
-        regterm = lambda / (ELT(2.0) * n) .* sum([dot(th, th) for th in theta[2:output_layer]])
-        cost = cost + regterm
+    if istraining
+        @fastmath if reg == "L2"  # set reg="" if not using regularization
+            regterm = lambda / (ELT(2.0) * n) .* sum([dot(th, th) for th in theta[2:output_layer]])
+            cost = cost + regterm
+        end
     end
     return cost
 end
@@ -299,10 +309,16 @@ end
 # update weights and optimization
 ######################
 
+#=
+    Plan for improving update_weights
+    1. we update weight, bias, and normparams
+    2. candidate update functions are adam, L1 OR L2 or none, weightdecay
+    3. always do them all but set some to noop--and skip them
+    4. so that we prevent operations on all zeros, which still cost a lot
+=#
 
 function update_weights!(layer::Layer, hp, t)
-    # Handle Adam/AdamW optimization based on layer's optparams
-    if isa(layer.optparams, AdamParam)
+    if isa(layer.optparams, AdamParam)   # Adam/AdamW optimization
         ad = layer.optparams
         pre_adam!(layer, ad, t)
         b1_divisor = ELT(1.0) / (ELT(1.0) - ad.b1^t)
@@ -310,7 +326,7 @@ function update_weights!(layer::Layer, hp, t)
 
         # Update weights with @turbo for better performance
         @turbo for i in eachindex(layer.weight)
-            # Base Adam update term
+            # Base Adam update term: avoids allocation by using scalars in the loop
             adam_term = (layer.grad_m_weight[i] * b1_divisor) / (sqrt(layer.grad_v_weight[i] * b2_divisor) + IT)
             layer.weight[i] -= hp.lr * adam_term
         end
@@ -355,8 +371,7 @@ function update_weights!(layer::Layer, hp, t)
                 bn.bet[i] -= hp.lr * adam_term_bet
             end
         end
-    else
-        # Simple SGD update
+    else  # SGD update with no optimization
         @turbo for i in eachindex(layer.weight)
             layer.weight[i] -= hp.lr * layer.grad_weight[i]
         end

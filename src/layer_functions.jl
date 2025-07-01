@@ -531,7 +531,7 @@ function (layer::LinearLayer)(layer_above::Union{LinearLayer, InputLayer}, curre
     if cb == mb  # just deref arrays in layer struct 
         eps_l = layer.eps_l
         a_below = layer.a_below
-        layer.isoutput || (eps_l_above = layer_above.eps_l)
+        layer.isoutput || (eps_l_above = layer_above.eps_l) # ugly but very little performance penalty
         grad_a = layer.grad_a
     else  # use views for the last minibatch 
         eps_l = view(layer.eps_l, :, cb_rng)

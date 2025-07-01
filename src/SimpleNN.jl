@@ -54,6 +54,7 @@ export
     setup_preds,
     prediction,
     minibatch_prediction,
+    mse_cost,
     train!,
     display_mnist_digit,
     weights2file,
