@@ -38,9 +38,9 @@ linear_reg1 = LayerSpec[
 
 
 preptest = false
-full_batch = 5000
+fullbatch = 5000
 minibatch_size = 5000
-epochs = 500
+epochs = 1000
 layerspecs = linear_reg1
 
 
@@ -59,21 +59,21 @@ xspec = [(3.0, 0.1)]
 slope  = [1.5]
 b = 0.4  # intercept
 
-x_train, y_train = lr_data(xspec, full_batch, slope, b);
+x_train, y_train = lr_data(xspec, fullbatch, slope, b);
 x_train = Float32.(x_train);
 y_train = Float32.(y_train);
 
     # if !preptest
-    #     x_train, y_train = setup_mnist(full_batch, preptest)
+    #     x_train, y_train = setup_mnist(fullbatch, preptest)
     # else
-    #     x_train, y_train, x_test, y_test = setup_mnist(full_batch, preptest)
+    #     x_train, y_train, x_test, y_test = setup_mnist(fullbatch, preptest)
     #     testsize = size(y_test, 2)
     # end;
 
 
 # %%  train the model
 
-stats = train!(layers; x=x_train, y=y_train, full_batch=full_batch,
+stats = train!(layers; x=x_train, y=y_train, fullbatch=fullbatch,
     epochs=epochs, minibatch_size=minibatch_size, hp=hp);
 
 

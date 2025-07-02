@@ -141,12 +141,12 @@ function allocate_layers(lsvec::Vector{LayerSpec}, batch_size)
 end
 
 
-function allocate_stats(full_batch, minibatch_size, epochs)
-    no_of_batches = div(full_batch, minibatch_size)
+function allocate_stats(fullbatch, minibatch_size, epochs)
+    no_of_batches = div(fullbatch, minibatch_size)
     stats = StatSeries(
         acc=zeros(ELT, no_of_batches * epochs),
         cost=zeros(ELT, no_of_batches * epochs),
-        batch_size=full_batch,
+        batch_size=fullbatch,
         epochs=epochs,
         minibatch_size=minibatch_size)
 end
@@ -284,7 +284,7 @@ function feedforward!(layers::Vector{<:Layer}, x, current_batch_size)
 
     @turbo va .= x
     @inbounds for (i, lr) in zip(2:length(layers), layers[2:end])  # assumes that layers[1] MUST be input layer without checking!   
-        # lr.mb_rng[] = mb_rng    # update the layer's value for minibatch range
+        # lr.mb_range[] = mb_range    # update the layer's value for minibatch range
         lr(layers[i-1].a, cb)  # dispatch on type of lr
     end
     return
@@ -294,12 +294,12 @@ function backprop!(layers::Vector{<:Layer}, y, current_batch_size)
     cb = current_batch_size
     # output layer is different
     dloss_dz!(layers[end], y, cb)
-    # layers[end].mb_rng[] = mb_rng  # update the layer's value for minibatch range
+    # layers[end].mb_range[] = mb_range  # update the layer's value for minibatch range
     layers[end](layers[end-1], cb)   # calls layer function for backward pass, passes layers[end] and layers[end-1]
 
     nlayers = length(layers)  # skip over output layer (end) and input layer (begin)
     @inbounds @views for (i, lr) in zip((nlayers-1):-1:2, reverse(layers[begin+1:end-1]))
-        # lr.mb_rng[] = mb_rng   # update the layer's value for minibatch range
+        # lr.mb_range[] = mb_range   # update the layer's value for minibatch range
         lr(layers[i+1], current_batch_size)
     end
     return
@@ -309,13 +309,6 @@ end
 # update weights and optimization
 ######################
 
-#=
-    Plan for improving update_weights
-    1. we update weight, bias, and normparams
-    2. candidate update functions are adam, L1 OR L2 or none, weightdecay
-    3. always do them all but set some to noop--and skip them
-    4. so that we prevent operations on all zeros, which still cost a lot
-=#
 
 function update_weights!(layer::Layer, hp, t)
     if isa(layer.optparams, AdamParam)
@@ -451,70 +444,47 @@ end
 # update weights and optimization
 # ============================
 
-function train!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size=0, hp=default_hp) where {L<:Layer}
+function train!(layers::Vector{L}; x, y, fullbatch, epochs, minibatch_size=0, hp=default_hp) where {L<:Layer}
 
-    dobatch = if minibatch_size == full_batch
-                false   # we are training on the full batch
-            elseif minibatch_size <= 39
-                error("Minibatch_size too small.  Choose a larger minibatch_size.")
-            elseif full_batch / minibatch_size > 3
-                true
-            else
-                error("Minibatch_size too large with fewer than 3 batches. Choose a much smaller minibatch_size.")
-            end
-
-    hp.do_stats && (stats = allocate_stats(full_batch, minibatch_size, epochs))  # TODO this won't work with full batch training
-    batch_counter = 0
-@show minibatch_size
-    last_batch = if minibatch_size > 0
-            rem(full_batch, minibatch_size)
+        if minibatch_size == fullbatch
+            dobatch = false   # we are training on the full batch
+            x_part = x
+            y_part = y
+            current_batch_size = fullbatch
+        elseif minibatch_size <= 39
+            error("Minibatch_size too small.  Choose a larger minibatch_size.")
+        elseif fullbatch / minibatch_size > 3
+            dobatch = true
         else
-            0
+            error("Minibatch_size too large with fewer than 3 batches. Choose a much smaller minibatch_size.")
         end
 
-    for e = 1:epochs
-        samples_left = full_batch
-        start_obs = end_obs = 0
-        # loop = true
-        current_batch_size = minibatch_size
+    hp.do_stats && (stats = allocate_stats(fullbatch, minibatch_size, epochs))  # TODO this won't work with full batch training
 
-        @inbounds while samples_left > 0 
-            if dobatch
-                if samples_left > minibatch_size  # continue
-                    start_obs = end_obs + 1
-                    end_obs = start_obs + minibatch_size - 1
-                else   # stop after this iteration setting the stop flag
-                    start_obs = end_obs + 1
-                    end_obs = start_obs + samples_left - 1
-                    current_batch_size = samples_left  # now it has changed and we need to update
-                    # loop = false
-                end
-                mb_rng = start_obs:end_obs
-                x_part = view_minibatch(x, mb_rng)
-                y_part = view_minibatch(y, mb_rng)
-                samples_left -= current_batch_size  # update the effective loop counter
-            else
-                x_part = x
-                y_part = y
-                samples_left = 0   # completing all samples in one batch
-                current_batch_size = full_batch
-                # loop = false  # just do it once per epoch
+    eval_counter = 0
+    @inbounds for e = 1:epochs
+        for i in 1:minibatch_size:fullbatch
+            if dobatch  # select x_part, y_part, calculate current_batch_size
+                start_idx = i
+                end_idx = min(i + minibatch_size - 1, fullbatch)
+                mb_range = start_idx:end_idx
+                x_part = view_minibatch(x, mb_range)
+                y_part = view_minibatch(y, mb_range)
+                current_batch_size = end_idx - start_idx + 1
             end
 
-            batch_counter += 1
+            eval_counter += 1
 
-            print("counter = ", batch_counter, "\r")
+            print("counter = ", eval_counter, "\r")
             flush(stdout)
-
-            # @show size(x_part)
 
             feedforward!(layers, x_part, current_batch_size)
 
             backprop!(layers, y_part, current_batch_size)
 
-            update_weight_loop!(layers, hp, batch_counter)
+            update_weight_loop!(layers, hp, eval_counter)
 
-            hp.do_stats && (gather_stats!(stats, layers, y_part, batch_counter, batno, e; to_console=false))
+            hp.do_stats && (gather_stats!(stats, layers, y_part, eval_counter, batno, e; to_console=false))
 
         end
     end
@@ -522,7 +492,6 @@ function train!(layers::Vector{L}; x, y, full_batch, epochs, minibatch_size=0, h
     hp.do_stats && return stats
     return
 end
-
 
 """
     gather_stats!(stat_series, layers, y_train, counter, batno, epoch; to_console=true, to_series=true)
@@ -549,7 +518,7 @@ function plot_stats(stats)
 end
 
 function minibatch_prediction(layers::Vector{Layer}, x, y, costfunc=cross_entropy_cost)
-    (out, full_batch) = size(y)
+    (out, fullbatch) = size(y)
     minibatch_size = size(layers[end].a, 2)  # TODO is this always going to work?
 
     # pre-allocate outcomes for use in loop
@@ -560,36 +529,22 @@ function minibatch_prediction(layers::Vector{Layer}, x, y, costfunc=cross_entrop
     total_correct = 0
     total_cnt = 0
     total_cost = 0
+    eval_counter = 0
 
-    # loop control and counters
-    samples_left = full_batch
-    start_obs = end_obs = 0
-    current_batch_size = minibatch_size
-    cb_rng = 1:current_batch_size
-    batch_counter = 0
+    @inbounds for i in 1:minibatch_size:fullbatch
+        start_idx = i
+        end_idx = min(i + minibatch_size - 1, fullbatch)
+        mb_range = start_idx:end_idx
+        x_part = view_minibatch(x, mb_range)
+        y_part = view_minibatch(y, mb_range)
+        current_batch_size = end_idx - start_idx + 1
 
-    @inbounds while samples_left > 0
-        if samples_left > minibatch_size  # continue
-            start_obs = end_obs + 1
-            end_obs = start_obs + minibatch_size - 1
-        else   
-            start_obs = end_obs + 1
-            end_obs = start_obs + samples_left - 1
-            current_batch_size = samples_left
-            cb_rng = 1:current_batch_size
-        end
-        mb_rng = start_obs:end_obs
-        x_part = view_minibatch(x, mb_rng)
-        y_part = view_minibatch(y, mb_rng)
-        samples_left -= minibatch_size  # update the effective loop counter
-
-        batch_counter += 1
+        eval_counter += 1
 
         feedforward!(layers, x_part, current_batch_size)
 
         # stats per batch: can't use x_part because that is input, layer 1
-        # @views preds .= layers[end].a[:, mb_rng]
-        preds = view_minibatch(layers[end].a, cb_rng)
+        preds = view_minibatch(layers[end].a, 1:current_batch_size)
         @turbo targets .= y_part
 
         (correct_count, total_samples) = accuracy_count(preds, targets)
@@ -599,7 +554,7 @@ function minibatch_prediction(layers::Vector{Layer}, x, y, costfunc=cross_entrop
         total_cost += cost
     end
 
-    return total_correct / total_cnt, total_cost / batch_counter
+    return total_correct / total_cnt, total_cost / eval_counter
 end
 
 function prediction(predlayers::Vector{<:Layer}, x_input, y_input)

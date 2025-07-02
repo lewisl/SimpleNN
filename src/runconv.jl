@@ -77,7 +77,7 @@ three_linear = LayerSpec[
 
 
 preptest = true
-full_batch = 60_000
+fullbatch = 60_000
 minibatch_size = 64
 epochs = 2
 layerspecs = one_conv
@@ -94,16 +94,16 @@ layers = setup_train(layerspecs, minibatch_size);
 
 
 if !preptest
-    x_train, y_train = setup_mnist(full_batch, preptest)
+    x_train, y_train = setup_mnist(fullbatch, preptest)
 else
-    x_train, y_train, x_test, y_test = setup_mnist(full_batch, preptest)
+    x_train, y_train, x_test, y_test = setup_mnist(fullbatch, preptest)
     testsize = size(y_test, 2)
 end;
 
 
 # %%  train the model
 
-stats = train!(layers; x=x_train, y=y_train, full_batch=full_batch,
+stats = train!(layers; x=x_train, y=y_train, fullbatch=fullbatch,
     epochs=epochs, minibatch_size=minibatch_size, hp=hp);
 
 
