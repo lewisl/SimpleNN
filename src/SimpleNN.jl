@@ -26,6 +26,7 @@ include("modifiers.jl")
 include("training.jl")
 include("mnist_fun.jl")
 include("regr_fun.jl")
+include("utility.jl")
 
 # data structures for neural network
 export
@@ -56,6 +57,7 @@ export
     prediction,
     minibatch_prediction,
     mse_cost,
+    cross_entropy_cost,
     train!,
     display_mnist_digit,
     weights2file,
@@ -66,9 +68,11 @@ export
     backprop!,
     update_weight_loop!,
     update_weights!,
-    pre_adam!,
-    pre_adam_batchnorm!,
-    adam_helper!
+    # pre_adam!,
+    # pre_adam_batchnorm!,
+    # adam_helper!,
+    standardize_features,
+    normalize_features
 
 
 

@@ -10,8 +10,6 @@ TODO
     calculation when cost is not directly used in backprop?
     A: only if printing cost progress during training and for training progress
         statistics
-- hide the minibatch complexity in a function
-- split apart update weights mess
 
 
 =#
@@ -194,6 +192,12 @@ function accuracy_count(preds, targets)
     (correct_count, total_samples) = _accuracy_base(preds, targets, true)
 end
 
+# use as rough accuracy for regression
+function accuracy_pct(preds, targets)
+    1.0 - mean(abs.(preds .- targets) ./ targets)
+end
+
+
 function accuracy(preds, targets)
     (correct_count, total_samples) = _accuracy_base(preds, targets)
     correct_count / total_samples
@@ -234,8 +238,18 @@ end
 # cost
 # ============================
 
+#method for training
+function cross_entropy_cost(target::AbstractMatrix{ELT}, pred::AbstractMatrix{ELT},  n_samples,layers, lambda=ELT(1.0), reg="")
+    cost = cross_entropy_cost(target, pred, n_samples)
+    @fastmath if reg == :L2  # set reg="" if not using regularization
+        regterm = lambda / (ELT(2.0) * n) .* sum([dot(lr.weight, lr.weight) for lr in layers[2:output_layer]])
+        cost += regterm
+    end
+    return cost
+end
 
-function cross_entropy_cost(pred::AbstractMatrix{ELT}, target::AbstractMatrix{ELT}, n_samples, training=false)
+# method for prediction
+function cross_entropy_cost(target::AbstractMatrix{ELT}, pred::AbstractMatrix{ELT},  n_samples)
     # this may not be obvious, but it is a non-allocating version
     n = n_samples
     log_sum1 = ELT(0.0)
@@ -254,16 +268,19 @@ function cross_entropy_cost(pred::AbstractMatrix{ELT}, target::AbstractMatrix{EL
     return (ELT(-1.0) / n) * (log_sum1 + log_sum2)
 end
 
-
-function mse_cost(targets, predictions, n, istraining = false, theta=[], lambda=ELT(1.0), reg="", output_layer=2)
-    @fastmath cost = (ELT(1.0) / (ELT(2.0) * n)) .* sum((targets .- predictions) .^ ELT(2.0))
-    if istraining
-        @fastmath if reg == "L2"  # set reg="" if not using regularization
-            regterm = lambda / (ELT(2.0) * n) .* sum([dot(th, th) for th in theta[2:output_layer]])
-            cost = cost + regterm
-        end
+# method for training
+function mse_cost(targets, predictions, n, layers, lambda=ELT(1.0), reg="")
+    @fastmath cost = (ELT(1.0) / (ELT(2.0) * n)) .* sum((targets .- predictions) .^ 2)
+    @fastmath if reg == :L2  # set reg="" if not using regularization
+        regterm = lambda / (ELT(2.0) * n) .* sum([dot(lr.weight, lr.weight) for lr in layers[2:output_layer]])
+        cost += regterm
     end
     return cost
+end
+
+# method for prediction
+function mse_cost(targets, predictions, n)
+    @fastmath cost = (ELT(1.0) / (ELT(2.0) * n)) .* sum((targets .- predictions) .^ 2)
 end
 
 # ============================
@@ -456,7 +473,7 @@ function train!(layers::Vector{L}; x, y, fullbatch, epochs, minibatch_size=0, hp
         elseif fullbatch / minibatch_size > 3
             dobatch = true
         else
-            error("Minibatch_size too large with fewer than 3 batches. Choose a much smaller minibatch_size.")
+            error("Minibatch_size too large with fewer than 3 batches. Choose a smaller minibatch_size at least 39 samples.")
         end
 
     hp.do_stats && (stats = allocate_stats(fullbatch, minibatch_size, epochs))  # TODO this won't work with full batch training
@@ -493,6 +510,8 @@ function train!(layers::Vector{L}; x, y, fullbatch, epochs, minibatch_size=0, hp
     return
 end
 
+
+# TODO create a cost_func variable to use the appropriate cost function
 """
     gather_stats!(stat_series, layers, y_train, counter, batno, epoch; to_console=true, to_series=true)
 
@@ -511,13 +530,12 @@ function gather_stats!(stat_series, layers, y_train, counter, batno, epoch; to_c
     end
 end
 
-
 function plot_stats(stats)
     plot(stats.acc, label="Accuracy", color=:blue, ylabel="Accuracy")
     plot!(twinx(), stats.loss, label="Cost", ylabel="Loss", color=:red)
 end
 
-function minibatch_prediction(layers::Vector{Layer}, x, y, costfunc=cross_entropy_cost)
+function minibatch_prediction(layers::Vector{Layer}, x, y, costfunc)
     (out, fullbatch) = size(y)
     minibatch_size = size(layers[end].a, 2)  # TODO is this always going to work?
 
@@ -547,11 +565,20 @@ function minibatch_prediction(layers::Vector{Layer}, x, y, costfunc=cross_entrop
         preds = view_minibatch(layers[end].a, 1:current_batch_size)
         @turbo targets .= y_part
 
-        (correct_count, total_samples) = accuracy_count(preds, targets)
-        cost = costfunc(preds, targets, current_batch_size)
-        total_correct += correct_count
-        total_cnt += total_samples
-        total_cost += cost
+        if costfunc === cross_entropy_cost
+            (correct_count, total_samples) = accuracy_count(preds, targets)
+            cost = costfunc(preds, targets, current_batch_size)
+            total_correct += correct_count
+            total_cnt += total_samples
+            # total_cost += cost
+            return total_correct / total_cnt, cost
+        elseif costfunc === mse_cost
+            cost = costfunc(preds, targets, current_batch_size)
+            return cost
+        else
+            error("costfunc must be mse_cost or cross_entropy_cost")
+        end
+
     end
 
     return total_correct / total_cnt, total_cost / eval_counter
@@ -568,51 +595,11 @@ end
 
 
 # ============================
-# Utility Functions
-# ============================
-
-function random_onehot(i, j)
-    arr = zeros(ELT, i, j)
-    for n in axes(arr, 2)
-        rowselector = rand(1:10)
-        arr[rowselector, n] = ELT(1.0)
-    end
-    return arr
-end
-
-# ============================
-# Save and load weights to/from files
-# ============================
-
-function weights2file(layers, suffix, pathstr)
-    for lr in fieldnames(typeof(layers))
-        serialize(joinpath(pathstr, string(lr) * "_bias" * '_' * suffix * ".dat"),
-            eval(getfield(layers, lr)).bias)
-        serialize(joinpath(pathstr, string(lr) * "_weight" * '_' * suffix * ".dat"),
-            eval(getfield(layers, lr)).weight)
-    end
-end
-
-# TODO this can't work any more
-# function file2weights(suffix, pathstr)
-#     outlayers = init_layers(n_samples=batch_size)
-#     for lr in fieldnames(typeof(outlayers))
-#         fname_bias = joinpath(pathstr, string(lr) * "_bias" * '_' * suffix * ".dat")
-#         fname_weight = joinpath(pathstr, string(lr) * "_weight" * '_' * suffix * ".dat")
-#         setfield!(getfield(layers, lr), :bias, deserialize(fname_bias))
-#         setfield!(getfield(layers, lr), :weight, deserialize(fname_weight))
-#     end
-#     return outlayers
-# end
-
-# ============================
 # update weights and optimization
 # ============================
 
 # helpers for minibatch views in training loop: works when range is an Int or a UnitRange{Int}
 @inline function view_minibatch(x::AbstractArray{T,2}, range) where T
-    # @show size(x)
-    # @show range
     view(x, :, range)
 end
 

@@ -110,13 +110,13 @@ stats = train!(layers; x=x_train, y=y_train, fullbatch=fullbatch,
 # %%  predict with full training set
 
 predlayerstrain = setup_preds(layerspecs, layers, minibatch_size);
-minibatch_prediction(predlayerstrain, x_train, y_train)
+minibatch_prediction(predlayerstrain, x_train, y_train,cross_entropy_cost)
 
 
 # %% predict with testset
 
 predlayerstest = setup_preds(layerspecs, layers, minibatch_size);
-minibatch_prediction(predlayerstest, x_test, y_test)
+minibatch_prediction(predlayerstest, x_test, y_test, cross_entropy_cost)
 
 
 # %% full batch prediction on test set, much slower  -- to verify that minibatch_prediction produces same result

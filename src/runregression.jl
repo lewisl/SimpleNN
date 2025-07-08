@@ -63,13 +63,6 @@ x_train, y_train = lr_data(xspec, fullbatch, slope, b);
 x_train = Float32.(x_train);
 y_train = Float32.(y_train);
 
-    # if !preptest
-    #     x_train, y_train = setup_mnist(fullbatch, preptest)
-    # else
-    #     x_train, y_train, x_test, y_test = setup_mnist(fullbatch, preptest)
-    #     testsize = size(y_test, 2)
-    # end;
-
 
 # %%  train the model
 
@@ -80,7 +73,7 @@ stats = train!(layers; x=x_train, y=y_train, fullbatch=fullbatch,
 # %%  predict with full training set
 
 predlayerstrain = setup_preds(layerspecs, layers, minibatch_size);
-minibatch_prediction(predlayerstrain, x_train, y_train)
+minibatch_prediction(predlayerstrain, x_train, y_train, mse_cost)
 
 
 # %% predict with testset
@@ -92,7 +85,7 @@ minibatch_prediction(predlayerstest, x_test, y_test, mse_cost)
 # %% full batch prediction on test set, much slower  -- to verify that minibatch_prediction produces same result
 
 predlayerstestfull = setup_preds(layerspecs, layers, testsize)
-prediction(predlayerstestfull, x_test, y_test)
+minibatch_prediction(predlayerstestfull, x_test, y_test, mse_cost)
 
 
 # %% predict a single example

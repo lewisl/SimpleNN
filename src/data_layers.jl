@@ -132,42 +132,6 @@ function outputlayerspec(; name::Symbol, activation::Symbol, optimization::Symbo
         optimization=optimization, outputdim=outputdim)
 end
 
-# ============================
-# Structs for layers: hold pre-allocated weights, bias, data storage
-# ============================
-
-# Base.@kwdef mutable struct Slice
-#     # for conv, some shared with maxpool
-#     z4::SubArray{ELT,4} = ELT[;;;;]
-#     znorm4::SubArray{ELT,4} = ELT[;;;;]
-#     a4::SubArray{ELT,4} = ELT[;;;;]
-#     a_below4::SubArray{ELT,4} = ELT[;;;;]
-#     pad_a_below::SubArray{ELT,4} = ELT[;;;;]
-#     eps_l4::SubArray{ELT,4} = ELT[;;;;]
-#     pad_above_eps::SubArray{ELT,4} = ELT[;;;;]
-#     grad_a4::SubArray{ELT,4} = ELT[;;;;]
-#     pad_x::SubArray{ELT,4} = ELT[;;;;]
-
-#     # for linear, some shared with flatten
-#     z::SubArray{ELT,2} = ELT[;;]       # feed forward linear combination result
-#     z_norm::SubArray{ELT,2} = ELT[;;]  # if doing batchnorm
-#     a::SubArray{ELT,2} = ELT[;;]       # feed forward activation output
-#     grad_a::SubArray{ELT,2} = ELT[;;]  # backprop derivative of activation output
-#     a_below::SubArray{ELT,2} = ELT[;;]  
-#     eps_l::SubArray{ELT,2} = ELT[;;]   # backprop error of the layer
-
-#     # for maxpooling
-#     # a: use a4
-#     mask::SubArray{Bool,4} = Bool[;;;;]
-#     # eps_l: use eps_l4
-
-#     # for flatten
-#     dl_dflat::SubArray{ELT,2} = ELT[;;]
-#     # a: use a
-#     # eps_l: use eps_l4
-
-# end
-
 
 Base.@kwdef struct ConvLayer <: Layer
     # data arrays
