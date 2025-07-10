@@ -94,9 +94,9 @@ layers = setup_train(layerspecs, minibatch_size);
 
 
 if !preptest
-    x_train, y_train = setup_mnist(fullbatch, preptest)
+    x_train, y_train = SimpleNN.setup_mnist(fullbatch, preptest)
 else
-    x_train, y_train, x_test, y_test = setup_mnist(fullbatch, preptest)
+    x_train, y_train, x_test, y_test = SimpleNN.setup_mnist(fullbatch, preptest)
     testsize = size(y_test, 2)
 end;
 
@@ -122,7 +122,16 @@ minibatch_prediction(predlayerstest, x_test, y_test, cross_entropy_cost)
 # %% full batch prediction on test set, much slower  -- to verify that minibatch_prediction produces same result
 
 predlayerstestfull = setup_preds(layerspecs, layers, testsize)
-prediction(predlayerstestfull, x_test, y_test)
+prediction(predlayerstestfull, x_test, y_test, cross_entropy_cost)
+# minibatch_prediction(predlayerstestfull, x_test, y_test, cross_entropy_cost)
+
+
+
+# %% full batch prediction on test set, much slower  -- to verify that minibatch_prediction produces same result
+
+
+predlayerstestfull = setup_preds(layerspecs, layers, testsize)
+minibatch_prediction(predlayerstestfull, x_test, y_test, cross_entropy_cost)
 
 
 # %% predict a single example

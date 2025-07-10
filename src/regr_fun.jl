@@ -88,19 +88,19 @@ variables can this variable explain?"
 - Partial R² value (proportion of remaining variance explained)
 """
 function partial_r_squared(X, y, weights, bias, feature_idx)
-    y_vec = vec(y)
+    y_v = view(y, :)
 
     # Full model prediction
     y_pred_full = weights * X .+ bias
-    y_pred_full_vec = vec(y_pred_full)
-    sse_full = sum((y_vec .- y_pred_full_vec).^2)
+    y_pred_full_v = view(y_pred_full, :)
+    sse_full = sum((y_v .- y_pred_full_v).^2)
 
     # Reduced model: remove the specified feature (set coefficient to 0)
     weights_reduced = copy(weights)
     weights_reduced[1, feature_idx] = 0.0
     y_pred_reduced = weights_reduced * X .+ bias
-    y_pred_reduced_vec = vec(y_pred_reduced)
-    sse_reduced = sum((y_vec .- y_pred_reduced_vec).^2)
+    y_pred_reduced_v = view(y_pred_reduced, :)
+    sse_reduced = sum((y_v .- y_pred_reduced_v).^2)
 
     # Partial R² = (SSE_reduced - SSE_full) / SSE_reduced
     partial_r2 = (sse_reduced - sse_full) / sse_reduced
@@ -137,7 +137,7 @@ function semi_partial_r_squared(X, y, weights, bias, feature_idx)
     y_pred_full = weights * X .+ bias
     r2_full = calculate_r2(y_pred_full, y)
 
-    # Reduced model R²: remove the specified feature (set coefficient to 0)
+    # Reduced model R²: remove the specified feature (set coefficient to 0.0)
     weights_reduced = copy(weights)
     weights_reduced[1, feature_idx] = 0.0
     y_pred_reduced = weights_reduced * X .+ bias
@@ -192,7 +192,7 @@ function analyze_regression_variance(X, y, output_layer)
         "overall_r2" => overall_r2,
         "partial_r2" => partial_r2,
         "semi_partial_r2" => semi_partial_r2,
-        "coefficients" => vec(weights),
+        "coefficients" => view(weights, :),
         "bias" => bias,
         "n_features" => n_features
     )
@@ -362,7 +362,7 @@ Useful for validating that the neural network converged to the optimal solution.
 """
 function compare_with_analytical_solution(X, y, output_layer)
     # Neural network solution
-    nn_weights = vec(output_layer.weight)
+    nn_weights = view(output_layer.weight, :)
     nn_bias = output_layer.bias[1]
 
     # Analytical least squares solution: β = (X'X)⁻¹X'y
@@ -370,7 +370,7 @@ function compare_with_analytical_solution(X, y, output_layer)
     X_with_bias = [X; ones(1, size(X, 2))]  # Add row of ones for bias
 
     # Solve normal equations
-    analytical_params = (X_with_bias * X_with_bias') \ (X_with_bias * vec(y))
+    analytical_params = (X_with_bias * X_with_bias') \ (X_with_bias * view(y, :))
     analytical_weights = analytical_params[1:end-1]
     analytical_bias = analytical_params[end]
 

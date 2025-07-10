@@ -31,23 +31,8 @@ x = hcat(Float32.(cars.cylinders), Float32.(cars.displacement),
 @show size(x)
 
 features = size(x,1)
-x_std = standardize_features(x)
+x_std = standardize_features(x);
 
-# %%   standardize debugging
-
-# Add after standardization:
-# println("Original x stats:")
-# for i in 1:size(x,1)
-#     println("Feature $i: mean=$(round(mean(x[i,:]), digits=3)), std=$(round(std(x[i,:]), digits=3))")
-# end
-
-# println("\nStandardized x_std stats:")
-# for i in 1:size(x_std,1)
-#     println("Feature $i: mean=$(round(mean(x_std[i,:]), digits=3)), std=$(round(std(x_std[i,:]), digits=3))")
-# end
-
-# println("\nTarget y stats:")
-# println("y: mean=$(round(mean(y), digits=3)), std=$(round(std(y), digits=3)), min=$(round(minimum(y), digits=3)), max=$(round(maximum(y), digits=3))")
 
 # %%      using Julia built-in linear regression
   
@@ -76,10 +61,11 @@ regr_model = LayerSpec[
     inputlayerspec(outputdim=features, name=:input)
     outputlayerspec(outputdim=1, activation=:regression, name=:output)
 ];
+
 preptest = false
 fullbatch = size(y,2)
 minibatch_size = fullbatch
-epochs = 1000
+epochs = 3000
 layerspecs = regr_model
 
 hp = HyperParameters(lr=ELT(0.008), reg=:none, regparm=ELT(0.00013), do_stats=false)  # reg=:L2, regparm=0.00043,
@@ -95,3 +81,8 @@ layers = setup_train(layerspecs, minibatch_size);
 
 stats = train!(layers; x=x_std, y=y, fullbatch=fullbatch,
     epochs=epochs, minibatch_size=minibatch_size, hp=hp);
+
+
+# %%
+
+acc, cost = minibatch_prediction(layers, x_std, y, mse_cost)

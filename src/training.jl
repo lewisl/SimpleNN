@@ -194,7 +194,9 @@ end
 
 # use as rough accuracy for regression
 function accuracy_pct(preds, targets)
-    1.0 - mean(abs.(preds .- targets) ./ targets)
+    preds_flat = view(preds, :)
+    targets_flat = view(targets, :)
+    1.0 - mean(abs.(preds_flat .- targets_flat) ./ targets_flat)
 end
 
 
@@ -249,9 +251,9 @@ function cross_entropy_cost(target::AbstractMatrix{ELT}, pred::AbstractMatrix{EL
 end
 
 # method for prediction
-function cross_entropy_cost(target::AbstractMatrix{ELT}, pred::AbstractMatrix{ELT},  n_samples)
+function cross_entropy_cost(target::AbstractMatrix{ELT}, pred::AbstractMatrix{ELT})
     # this may not be obvious, but it is a non-allocating version
-    n = n_samples
+    n_samples = size(pred, ndims(pred))
     log_sum1 = ELT(0.0)
     log_sum2 = ELT(0.0)
 
@@ -265,7 +267,7 @@ function cross_entropy_cost(target::AbstractMatrix{ELT}, pred::AbstractMatrix{EL
         log_sum2 += (ELT(1.0) - target[i]) * log(inv_pred)
     end
 
-    return (ELT(-1.0) / n) * (log_sum1 + log_sum2)
+    return (ELT(-1.0) / n_samples) * (log_sum1 + log_sum2)
 end
 
 # method for training
@@ -279,7 +281,8 @@ function mse_cost(targets, predictions, n, layers, lambda=ELT(1.0), reg="")
 end
 
 # method for prediction
-function mse_cost(targets, predictions, n)
+function mse_cost(predictions, targets) # don't use regularization cost term
+    n = length(targets)
     @fastmath cost = (ELT(1.0) / (ELT(2.0) * n)) .* sum((targets .- predictions) .^ 2)
 end
 
@@ -291,13 +294,7 @@ function feedforward!(layers::Vector{<:Layer}, x, current_batch_size)
     cb = current_batch_size
     cb_rng = 1:cb
 
-    # @show size(layers[begin].a)
-
-
     va = view_minibatch(layers[begin].a, cb_rng)
-
-    # @show size(va)
-    # @show size(x)
 
     @turbo va .= x
     @inbounds for (i, lr) in zip(2:length(layers), layers[2:end])  # assumes that layers[1] MUST be input layer without checking!   
@@ -470,7 +467,7 @@ function train!(layers::Vector{L}; x, y, fullbatch, epochs, minibatch_size=0, hp
             current_batch_size = fullbatch
         elseif minibatch_size <= 39
             error("Minibatch_size too small.  Choose a larger minibatch_size.")
-        elseif fullbatch / minibatch_size > 3
+        elseif fullbatch / minibatch_size >= 3
             dobatch = true
         else
             error("Minibatch_size too large with fewer than 3 batches. Choose a smaller minibatch_size at least 39 samples.")
@@ -518,7 +515,7 @@ end
 During each training loop, add loss and accuracy to stat_series for each batch trained.
 """
 function gather_stats!(stat_series, layers, y_train, counter, batno, epoch; to_console=true, to_series=true)
-    cost = cross_entropy_cost((layers[end].a), y_train, (stat_series.minibatch_size))
+    cost = cross_entropy_cost((layers[end].a), y_train)  #, (stat_series.minibatch_size)
     acc = accuracy((layers[end].a), y_train)
     if to_series
         stat_series.cost[counter] = cost
@@ -539,58 +536,57 @@ function minibatch_prediction(layers::Vector{Layer}, x, y, costfunc)
     (out, fullbatch) = size(y)
     minibatch_size = size(layers[end].a, 2)  # TODO is this always going to work?
 
-    # pre-allocate outcomes for use in loop
-    preds = zeros(ELT, out, minibatch_size)
-    targets = zeros(ELT, out, minibatch_size)
-
     # accumulators
-    total_correct = 0
-    total_cnt = 0
-    total_cost = 0
     eval_counter = 0
+    mb_range = 1:1
+    
+    if fullbatch > minibatch_size  # feedforward through all minibatches
+        preds = zeros(ELT, out, fullbatch)  # hold predictions across all minibatches
+        @inbounds for i in 1:minibatch_size:fullbatch 
+            start_idx = i
+            end_idx = min(i + minibatch_size - 1, fullbatch)
+            mb_range = start_idx:end_idx
+            x_part = view_minibatch(x, mb_range)
+            current_batch_size = end_idx - start_idx + 1
 
-    @inbounds for i in 1:minibatch_size:fullbatch
-        start_idx = i
-        end_idx = min(i + minibatch_size - 1, fullbatch)
-        mb_range = start_idx:end_idx
-        x_part = view_minibatch(x, mb_range)
-        y_part = view_minibatch(y, mb_range)
-        current_batch_size = end_idx - start_idx + 1
+            eval_counter += 1
 
-        eval_counter += 1
-
-        feedforward!(layers, x_part, current_batch_size)
-
-        # stats per batch: can't use x_part because that is input, layer 1
-        preds = view_minibatch(layers[end].a, 1:current_batch_size)
-        @turbo targets .= y_part
-
-        if costfunc === cross_entropy_cost
-            (correct_count, total_samples) = accuracy_count(preds, targets)
-            cost = costfunc(preds, targets, current_batch_size)
-            total_correct += correct_count
-            total_cnt += total_samples
-            # total_cost += cost
-            return total_correct / total_cnt, cost
-        elseif costfunc === mse_cost
-            cost = costfunc(preds, targets, current_batch_size)
-            return cost
-        else
-            error("costfunc must be mse_cost or cross_entropy_cost")
-        end
-
+            feedforward!(layers, x_part, current_batch_size)
+            @views preds[:, mb_range] = layers[end].a[:,1:current_batch_size]  # aggregate each minibatch result into all preds
+        end 
+    else
+        feedforward!(layers, x, fullbatch)
+        preds = layers[end].a
     end
 
-    return total_correct / total_cnt, total_cost / eval_counter
+    if costfunc === cross_entropy_cost
+        acc = accuracy(preds, y)
+        cost = costfunc(preds, y)
+    elseif costfunc === mse_cost
+        acc = accuracy_pct(preds, y) 
+        cost = costfunc(preds, y)
+    else
+        error("costfunc must be mse_cost or cross_entropy_cost")
+    end
+    return acc, cost
 end
 
-function prediction(predlayers::Vector{<:Layer}, x_input, y_input)
-    n_samples = size(x_input, ndims(x_input))
-    feedforward!(predlayers, x_input, n_samples)
+# TODO we probably don't need this because we can run batch prediction with a batch of all samples
+function prediction(predlayers::Vector{Layer}, x, y, costfunc)
+    fullbatch = size(x, ndims(x))
+
+    feedforward!(predlayers, x, fullbatch)
     preds = predlayers[end].a
-    acc = accuracy(preds, y_input)
-    cost = cross_entropy_cost(preds, y_input, n_samples)
-    println("Accuracy $acc  Cost $cost")
+    if costfunc === cross_entropy_cost
+        acc = accuracy(preds, y)
+        cost = costfunc(preds, y)
+    elseif costfunc === mse_cost
+        acc = accuracy_pct(preds, y) 
+        cost = costfunc(preds, y)
+    else
+        error("costfunc must be mse_cost or cross_entropy_cost")
+    end
+    return acc, cost
 end
 
 
