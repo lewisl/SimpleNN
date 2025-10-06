@@ -270,12 +270,125 @@ function print_variance_analysis(results; feature_names=nothing)
     println("Method Comparison:")
     println("Sum of Semi-Partial R²: $(round(total_semi_partial_r2, digits=4))")
     println("Overall model R²: $(round(results["overall_r2"], digits=4))")
+    println("Shared variance (due to correlation): $(round(results["overall_r2"] - total_semi_partial_r2, digits=4))")
+
     println()
     println("Interpretation:")
     println("• Partial R²: What % of remaining variance each feature explains")
     println("• Semi-Partial R²: Unique contribution to overall R² (these sum up)")
     println("• Semi-partial values sum to overall R² when features are uncorrelated")
 end
+
+"""
+    cross_correlation_matrix(X, y=nothing)
+
+Compute the Pearson cross-correlation matrix among features (rows of X).
+Optionally, if `y` is provided, also compute the correlation between each
+feature and the target.
+
+Arguments:
+- X: features × samples
+- y: optional target vector/row-vector length = samples
+
+Returns:
+- Dict with keys:
+  - "feature_corr" => n_features × n_features correlation matrix
+  - "feature_target_corr" => length n_features vector (only if y provided)
+"""
+function cross_correlation_matrix(X, y=nothing)
+    n_features, n_samples = size(X)
+    C = Matrix{Float64}(undef, n_features, n_features)
+
+    # Precompute stds of each feature
+    stds  = [std(view(X, i, :))  for i in 1:n_features]
+
+    # If any std is zero, correlations with that feature are NaN
+    for i in 1:n_features
+        for j in i:n_features
+            si = stds[i]; sj = stds[j]
+            if si == 0.0 || sj == 0.0
+                C[i, j] = NaN
+                C[j, i] = NaN
+            else
+                xi = view(X, i, :)
+                xj = view(X, j, :)
+                # Pearson correlation
+                C[i, j] = cor(xi, xj)
+                C[j, i] = C[i, j]
+            end
+        end
+    end
+
+    result = Dict{String, Any}("feature_corr" => C)
+
+    if y !== nothing
+        yv = view(y, :)
+        sy = std(yv)
+        ft = Vector{Float64}(undef, n_features)
+        for i in 1:n_features
+            if stds[i] == 0.0 || sy == 0.0
+                ft[i] = NaN
+            else
+                xi = view(X, i, :)
+                ft[i] = cor(xi, yv)
+            end
+        end
+        result["feature_target_corr"] = ft
+    end
+
+    return result
+end
+
+"""
+    print_correlation_report(corr_results; feature_names=nothing)
+
+Pretty-print the feature correlation matrix and, if present,
+correlations with the target.
+
+Arguments:
+- corr_results: Dict returned by cross_correlation_matrix
+- feature_names: optional vector of names for labeling rows/columns
+"""
+function print_correlation_report(corr_results; feature_names=nothing)
+    C = corr_results["feature_corr"]
+    n_features = size(C, 1)
+
+    names = feature_names === nothing ? ["Feature $i" for i in 1:n_features] : feature_names
+
+    println("=== Feature Correlation Matrix ===")
+    # Header
+    print(rpad("", 14))
+    for j in 1:n_features
+        print(rpad(names[j], 12))
+    end
+    println()
+
+    # Rows
+    for i in 1:n_features
+        print(rpad(names[i], 14))
+        for j in 1:n_features
+            val = C[i, j]
+            if isnan(val)
+                print(rpad("NaN", 12))
+            else
+                print(rpad(string(round(val, digits=4)), 12))
+            end
+        end
+        println()
+    end
+
+    if haskey(corr_results, "feature_target_corr")
+        ft = corr_results["feature_target_corr"]
+        println()
+        println("Correlation with target (y):")
+        for i in 1:n_features
+            val = ft[i]
+            s = isnan(val) ? "NaN" : string(round(val, digits=4))
+            println("  $(names[i]): $s")
+        end
+    end
+end
+
 
 # Test layer structure for testing functions
 struct TestLayer

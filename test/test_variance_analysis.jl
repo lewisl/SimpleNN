@@ -153,6 +153,35 @@ end
         @test_nowarn print_variance_analysis(test_results, feature_names=feature_names)
     end
 
+    @testset "cross_correlation_matrix and report" begin
+        Random.seed!(123)
+        n = 2000
+        x1 = randn(n)
+        x2 = 2 .* x1 .+ 0.01 .* randn(n)   # ~perfect correlation with x1
+        x3 = randn(n)                      # ~independent
+        Xc = [x1'; x2'; x3']
+        y = 3 .* x1 .+ 0.5 .* randn(n)
+
+        corr = cross_correlation_matrix(Xc, y)
+        C = corr["feature_corr"]
+        ft = corr["feature_target_corr"]
+
+        @test size(C) == (3, 3)
+        @test length(ft) == 3
+        @test C[1,1] ≈ 1.0 atol=1e-12
+        @test C[2,2] ≈ 1.0 atol=1e-12
+        @test C[3,3] ≈ 1.0 atol=1e-12
+        @test C[1,2] > 0.999   # very strong correlation
+        @test abs(C[1,3]) < 0.08  # near zero
+        @test abs(C[2,3]) < 0.08  # near zero
+        @test ft[1] > 0.95
+        @test abs(ft[3]) < 0.1
+
+        # Show the report output
+        @test_nowarn print_correlation_report(corr; feature_names=["x1","x2","x3"])
+    end
+
+
     @testset "Edge cases and error handling" begin
         # Test with single feature
         X_single = reshape([1.0, 2.0, 3.0, 4.0, 5.0], 1, :)

@@ -73,8 +73,10 @@ export
     # adam_helper!,
     standardize_features,
     normalize_features,
-    analyze_regression_analysis,
-    print_variance_analysis
+    analyze_regression_variance,
+    print_variance_analysis,
+    cross_correlation_matrix,
+    print_correlation_report
 
 
 

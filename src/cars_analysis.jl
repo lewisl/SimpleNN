@@ -35,11 +35,17 @@ y = Float32.(cars.mpg)';
 x = hcat(Float32.(cars.cylinders), Float32.(cars.displacement), 
         parse.(Float32,cars.horsepower), Float32.(cars.weight), 
         Float32.(cars.acceleration))';
+x_small = hcat(Float32.(cars.displacement), Float32.(cars.weight))';
 @show size(y)
 @show size(x)
+@show size(x_small)
 
 features = size(x,1)
+features_small = size(x_small, 1)
 x_std = standardize_features(x);
+x_std_small = standardize_features(x_small);
+feature_names = ["cylinders","displacement","horsepower","weight","acceleration"]
+feature_names_small = ["displacement","weight"]
 
 
 # %%      using Julia built-in linear regression
@@ -97,4 +103,8 @@ acc, cost = minibatch_prediction(layers, x_std, y, mse_cost)
 
 results = analyze_regression_variance(x_std, y, layers[end])
 
-print_variance_analysis(results)
+print_variance_analysis(results, feature_names=feature_names)
+
+# Correlation diagnostics (features and with target)
+corr = cross_correlation_matrix(x_std, y)
+print_correlation_report(corr; feature_names=feature_names)
