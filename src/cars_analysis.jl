@@ -94,3 +94,7 @@ stats = train!(layers; x=x_std, y=y, fullbatch=fullbatch,
 # %%
 
 acc, cost = minibatch_prediction(layers, x_std, y, mse_cost)
+
+results = analyze_regression_variance(x_std, y, layers[end])
+
+print_variance_analysis(results)

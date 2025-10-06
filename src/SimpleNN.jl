@@ -72,7 +72,10 @@ export
     # pre_adam_batchnorm!,
     # adam_helper!,
     standardize_features,
-    normalize_features
+    normalize_features,
+    analyze_regression_analysis,
+    print_variance_analysis
+
 
 
 
