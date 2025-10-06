@@ -36,11 +36,19 @@ end
 """
     calculate_r2(y_pred, y_true)
 
-Calculate the coefficient of determination (R²) for regression results.
+Compute the coefficient of determination (R²) from predictions and targets.
+
+Mathematically: R² = 1 − SSE/SST, where
+- SSE = ∑(y_true − y_pred)^2  (residual sum of squares)
+- SST = ∑(y_true − mean(y_true))^2  (total sum of squares)
+
+Notes:
+- Accepts vectors or matrices (any shape that can be viewed as a vector); no copies are made.
+- If y_true has no variance (SST = 0), the result will be NaN (by definition R² is undefined in that case).
 
 # Arguments
-- `y_true`: actual target values
 - `y_pred`: predicted values from the model
+- `y_true`: actual target values
 
 # Returns
 - R² value (coefficient of determination)
@@ -61,6 +69,8 @@ function calculate_r2(y_pred, y_true)
 
     return r2
 end
+
+
 
 
 """
@@ -97,7 +107,7 @@ function partial_r_squared(X, y, weights, bias, feature_idx)
 
     # Reduced model: remove the specified feature (set coefficient to 0)
     weights_reduced = copy(weights)
-    weights_reduced[1, feature_idx] = 0.0
+    weights_reduced[1, feature_idx] = 0.0  # weights is (1, n_features), so access [row, col]
     y_pred_reduced = weights_reduced * X .+ bias
     y_pred_reduced_v = view(y_pred_reduced, :)
     sse_reduced = sum((y_v .- y_pred_reduced_v).^2)
@@ -187,12 +197,17 @@ function analyze_regression_variance(X, y, output_layer)
         semi_partial_r2[i] = semi_partial_r_squared(X, y, weights, bias, i)
     end
 
+    # Calculate variance explained percentages for each feature
+    # This is based on the semi-partial R² values (unique contributions)
+    variance_explained_pct = semi_partial_r2 .* 100.0
+
     # Create results dictionary
     results = Dict(
         "overall_r2" => overall_r2,
         "partial_r2" => partial_r2,
         "semi_partial_r2" => semi_partial_r2,
-        "coefficients" => view(weights, :),
+        "variance_explained_pct" => variance_explained_pct,
+        "coefficients" => vec(weights),  # Flatten to vector for easier access
         "bias" => bias,
         "n_features" => n_features
     )
@@ -232,15 +247,16 @@ function print_variance_analysis(results; feature_names=nothing)
     for i in 1:n_features
         feature_name = feature_names !== nothing ? feature_names[i] : "Feature $i"
         coeff_val = results["coefficients"][i]
-        # partial_r2 = results["partial_r2"][i]
-        # semi_partial_r2 = results["semi_partial_r2"][i]
+        partial_r2 = results["partial_r2"][i]
+        semi_partial_r2 = results["semi_partial_r2"][i]
+        var_explained_pct = results["variance_explained_pct"][i]
 
         println("$feature_name:")
         println("  Coefficient: $(round(coeff_val, digits=4))")
-        # println("  Partial R²: $(round(partial_r2, digits=4)) ($(round(partial_r2 * 100, digits=2))%)")
-        # println("    → Of remaining unexplained variance, this feature explains $(round(partial_r2 * 100, digits=1))%")
-        # println("  Semi-Partial R²: $(round(semi_partial_r2, digits=4)) ($(round(semi_partial_r2 * 100, digits=2))%)")
-        println("    → Unique contribution to overall R²")
+        println("  Partial R²: $(round(partial_r2, digits=4)) ($(round(partial_r2 * 100, digits=2))%)")
+        println("    → Of remaining unexplained variance, this feature explains $(round(partial_r2 * 100, digits=1))%")
+        println("  Semi-Partial R²: $(round(semi_partial_r2, digits=4)) ($(round(semi_partial_r2 * 100, digits=2))%)")
+        println("    → Unique contribution to overall R²: $(round(var_explained_pct, digits=2))%")
         println()
     end
 
@@ -311,7 +327,7 @@ function test_variance_functions()
 
     y_test = coeffs_test' * X_test .+ bias_test .+ 0.1 * randn(n)'
 
-    layer_test = TestLayer(reshape(coeffs_test, :, 1), [bias_test])
+    layer_test = TestLayer(reshape(coeffs_test, 1, :), [bias_test])  # (1, n_features) format
     results_test = analyze_regression_variance(X_test, y_test, layer_test)
 
     # Feature 2 should explain more variance despite lower feature variance
