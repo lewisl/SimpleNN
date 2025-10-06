@@ -379,7 +379,7 @@ function LinearLayer(lr::LayerSpec, prevlayer, n_samples)
         activationf = relu!
     elseif lr.activation == :leaky_relu
         activationf = leaky_relu!
-    elseif lr.activation == :none
+ lr.activation == :none
         activationf = noop
     elseif lr.activation == :softmax
         activationf = softmax!

@@ -40,7 +40,7 @@ linear_reg1 = LayerSpec[
 preptest = false
 fullbatch = 5000
 minibatch_size = 5000
-epochs = 1000
+epochs = 600
 layerspecs = linear_reg1
 
 

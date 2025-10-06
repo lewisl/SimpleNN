@@ -7,6 +7,14 @@ using StatsBase
 
 const ELT = Float32
 
+"""
+    load_data(df)
+
+Load a csv file, input string filename, into a LazyTable. Filter out rows for which
+the horsepower is a missing value denoted by a "?".
+
+Returns the LazyTable.
+"""
 function load_data(df)
     tmp = (LazyTable(CSV.File(df)))
     tmp = filter(row -> row.horsepower != "?", tmp)
@@ -65,7 +73,7 @@ regr_model = LayerSpec[
 preptest = false
 fullbatch = size(y,2)
 minibatch_size = fullbatch
-epochs = 3000
+epochs = 600
 layerspecs = regr_model
 
 hp = HyperParameters(lr=ELT(0.008), reg=:none, regparm=ELT(0.00013), do_stats=false)  # reg=:L2, regparm=0.00043,

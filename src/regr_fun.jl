@@ -232,14 +232,14 @@ function print_variance_analysis(results; feature_names=nothing)
     for i in 1:n_features
         feature_name = feature_names !== nothing ? feature_names[i] : "Feature $i"
         coeff_val = results["coefficients"][i]
-        partial_r2 = results["partial_r2"][i]
-        semi_partial_r2 = results["semi_partial_r2"][i]
+        # partial_r2 = results["partial_r2"][i]
+        # semi_partial_r2 = results["semi_partial_r2"][i]
 
         println("$feature_name:")
         println("  Coefficient: $(round(coeff_val, digits=4))")
-        println("  Partial R²: $(round(partial_r2, digits=4)) ($(round(partial_r2 * 100, digits=2))%)")
-        println("    → Of remaining unexplained variance, this feature explains $(round(partial_r2 * 100, digits=1))%")
-        println("  Semi-Partial R²: $(round(semi_partial_r2, digits=4)) ($(round(semi_partial_r2 * 100, digits=2))%)")
+        # println("  Partial R²: $(round(partial_r2, digits=4)) ($(round(partial_r2 * 100, digits=2))%)")
+        # println("    → Of remaining unexplained variance, this feature explains $(round(partial_r2 * 100, digits=1))%")
+        # println("  Semi-Partial R²: $(round(semi_partial_r2, digits=4)) ($(round(semi_partial_r2 * 100, digits=2))%)")
         println("    → Unique contribution to overall R²")
         println()
     end
