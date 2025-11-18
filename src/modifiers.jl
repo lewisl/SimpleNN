@@ -40,9 +40,9 @@ function batchnorm!(layer::LinearLayer, current_batch_size::Int)
     vzn = view_minibatch(layer.z_norm, cb_rng)
     vz = view_minibatch(layer.z, cb_rng)
 
-    if bn.istraining[]        # access value of Ref, like a 1 element array
-        mean!(bn.mu, layer.z)
-        bn.stddev .= std(layer.z, dims=2)
+    if bn.istraining[]  # access value of Ref, like a 1 element array
+        mean!(bn.mu, vz)
+        bn.stddev .= std(vz, dims=2)
 
         @turbo @. @views vzn = (vz - bn.mu) / (bn.stddev + IT) # normalized: often xhat or zhat
         @turbo @. @views vz = vzn * bn.gam + bn.bet  # shift & scale: often called y
@@ -308,12 +308,13 @@ end
 
 # TODO  need to verify logic for this
 function logistic_grad!(layer, current_batch_size)
+    # The gradient of logistic sigmoid σ(z) is σ(z) * (1 - σ(z)).
+    # Since layer.a already holds σ(z) from the forward pass, we can reuse it.
     cb = current_batch_size
     cb_rng = 1:cb
-    vz = view_minibatch(layer.z,cb_rng)
+    va = view_minibatch(layer.a, cb_rng)
     vgrada = view_minibatch(layer.grad_a, cb_rng)
-    #
-    @turbo vgrada .= nothing
+    @turbo @. vgrada = va * (ELT(1.0) - va)
 end
 
 

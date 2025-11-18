@@ -43,16 +43,16 @@ function (layer::ConvLayer)(x::AbstractArray{ELT,4}, current_batch_size::Int)
         pad_x = layer.pad_x
         z = layer.z
     else
-        a_below = view(layer.a_below, :,:,:, cb_rng)
+        a_below = view(layer.a_below, :, :, :, cb_rng)
         x = view(x, :, :, :, cb_rng)  # don't need a non-view of x because it's an input we don't pull from the layer variable
         pad_x = view(layer.pad_x, :, :, :, cb_rng)
-        z = view(layer.z, :,:,:, cb_rng)
+        z = view(layer.z, :, :, :, cb_rng)
     end
 
     a_below .= x
     pad = layer.pad
 
-    if layer.padrule == :same 
+    if layer.padrule == :same
         @turbo @views pad_x[begin+pad:end-pad, begin+pad:end-pad, :, :] .= x
         use_x = pad_x  # use_x is a "selector" alias
     else
@@ -62,7 +62,7 @@ function (layer::ConvLayer)(x::AbstractArray{ELT,4}, current_batch_size::Int)
     # initialize output z with 0.0f0 if nobias or with bias: when dobias==false, layer.bias remains as initialized to zeros
     if layer.dobias
         for oc in axes(layer.z, 3)
-            @turbo z[:,:,oc, :] .= layer.bias[oc]
+            @turbo z[:, :, oc, :] .= layer.bias[oc]
         end
     else
         @turbo fill!(z, ELT(0.0))  # all initialized to zero, 1/2x time of inserting bias    layer.z
@@ -77,7 +77,7 @@ function (layer::ConvLayer)(x::AbstractArray{ELT,4}, current_batch_size::Int)
                         for fh in axes(layer.weight, 1)  # filter height
                             for fw in axes(layer.weight, 2)  # filter width
                                 z[i, j, oc, b] += use_x[i+fh-1, j+fw-1, ic, b] *   #   layer.z   layer.pad_x
-                                                layer.weight[fh, fw, ic, oc]
+                                                  layer.weight[fh, fw, ic, oc]
                             end
                         end
                     end
@@ -126,10 +126,10 @@ function (layer::ConvLayer)(layer_above, current_batch_size::Int)
         pad_above_eps = layer.pad_above_eps
         eps_l_above = layer_above.eps_l
     else
-        eps_l = view(layer.eps_l, :,:,:, cb_rng)
-        grad_a = view(layer.grad_a, :,:,:, cb_rng)
-        pad_above_eps = view(layer.pad_above_eps, :,:,:, cb_rng)
-        eps_l_above = view(layer_above.eps_l, :,:,:, cb_rng)
+        eps_l = view(layer.eps_l, :, :, :, cb_rng)
+        grad_a = view(layer.grad_a, :, :, :, cb_rng)
+        pad_above_eps = view(layer.pad_above_eps, :, :, :, cb_rng)
+        eps_l_above = view(layer_above.eps_l, :, :, :, cb_rng)
     end
 
     fill!(layer.grad_weight, ELT(0.0))  # reinitialization to allow accumulation of convolutions
@@ -183,8 +183,21 @@ function (layer::ConvLayer)(layer_above, current_batch_size::Int)
     compute_grad_weight!(layer, inverse_n_samples, current_batch_size)
     cb = current_batch_size
 
-    if layer.dobias   
-        layer.grad_bias .= reshape(sum(eps_l_above, dims=(1, 2, 4)), oc) .* inverse_n_samples
+    if layer.dobias
+        # replace with explicit loop for optimization   
+        # layer.grad_bias .= reshape(sum(eps_l_above, dims=(1, 2, 4)), oc) .* inverse_n_samples
+
+        fill!(layer.grad_bias, ELT(0.0))
+        @turbo for b in cb_rng
+            for j in axes(eps_l_above, 2)
+                for i in axes(eps_l_above, 1)
+                    for c in axes(eps_l_above, 3)
+                        layer.grad_bias[c] += eps_l_above[i, j, c, b]
+                    end
+                end
+            end
+        end
+        layer.grad_bias .*= inverse_n_samples
     end
 
     return     # nothing
@@ -201,19 +214,19 @@ function compute_grad_weight!(layer, inverse_n_samples, current_batch_size)
         a_below = layer.a_below
         pad_a_below = layer.pad_a_below
     else
-        eps_l = view(layer.eps_l, :,:,:, cb_rng)
-        grad_weight = view(layer.grad_weight, :,:,:, cb_rng)
-        a_below = view(layer.a_below, :,:,:, cb_rng)
-        pad_a_below = view(layer.pad_a_below, :,:,:, cb_rng)
+        eps_l = view(layer.eps_l, :, :, :, cb_rng)
+        grad_weight = view(layer.grad_weight, :, :, :, cb_rng)
+        a_below = view(layer.a_below, :, :, :, cb_rng)
+        pad_a_below = view(layer.pad_a_below, :, :, :, cb_rng)
     end
     # @show size(layer.pad_a_below)
     # @show size(layer.a_below)
 
     # Initialize grad_weight to zero
-    fill!(layer.grad_weight, ELT(0.0)) # no allocations; faster than assignment
+    # fill!(layer.grad_weight, ELT(0.0)) # no allocations; faster than assignment
     if layer.padrule == :same  # remarkably, this works
         pad = layer.pad
-        @views pad_a_below[begin+pad:end-pad, begin+pad:end-pad, :, :] .= a_below 
+        @views pad_a_below[begin+pad:end-pad, begin+pad:end-pad, :, :] .= a_below
         use_a_below = a_below   # no allocation
     else  # when padding is :none (e.g., 0) then ...
         use_a_below = a_below   # set alias to a_below to use in loop below.  no allocation
@@ -239,7 +252,15 @@ function compute_grad_weight!(layer, inverse_n_samples, current_batch_size)
                     # Extract the overlapping region of input corresponding to eps_l[:, :, oc, :]
                     local_patch = @view input_chan[fi:fi+H_out-1, fj:fj+W_out-1, :]
                     # Accumulate gradient for weight at (fi,fj, ic, oc)
-                    layer.grad_weight[fi, fj, ic, oc] += sum(l * e for (l, e) in zip(local_patch, err))
+                    # layer.grad_weight[fi, fj, ic, oc] += sum(l * e for (l, e) in zip(local_patch, err))
+
+                    # attempt proposed optimization
+                    accum = ELT(0.0)
+                    @turbo for idx in eachindex(local_patch, err)
+                        accum += local_patch[idx] * err[idx]
+                    end
+                    layer.grad_weight[fi, fj, ic, oc] += accum
+
                 end
             end
         end
@@ -480,14 +501,14 @@ function (layer::LinearLayer)(x::Matrix{ELT}, current_batch_size::Int)
         a_below = view(layer.a_below, :, cb_rng)
     end
     # @views mul!(layer.z[:, cb_rng], layer.weight, x[:, cb_rng])  # in-place matrix multiplication
-    mul!(z, layer.weight, x) 
+    mul!(z, layer.weight, x)
 
     # bias: explicit loop faster than broadcasting
     if layer.dobias
         @turbo for j in cb_rng   # axes(layer.z, 2)   #   mb_rng # For each column (sample)
             for i in axes(layer.z, 1)  # For each row (output neuron)
                 # layer.z[i, j] += layer.bias[i]
-                z[i,j] += layer.bias[i]
+                z[i, j] += layer.bias[i]
             end
         end
     end
@@ -522,12 +543,12 @@ errors to lower layers).
 This implementation handles both output and hidden layers differently, applying
 appropriate activation gradients and normalization gradients as needed.
 """
-function (layer::LinearLayer)(layer_above::Union{LinearLayer, InputLayer}, current_batch_size::Int)  # layer_above::LinearLayer
+function (layer::LinearLayer)(layer_above::Union{LinearLayer,InputLayer}, current_batch_size::Int)  # layer_above::LinearLayer
     # for the outputlayer, layer_above is actually layer below
     # TODO it might be nice to have a separate method for the output layer: how to dispatch on it?
     cb = current_batch_size
     cb_rng = 1:cb
-    mb = size(layer.eps_l,2)
+    mb = size(layer.eps_l, 2)
     if cb == mb  # just deref arrays in layer struct 
         eps_l = layer.eps_l
         a_below = layer.a_below
@@ -564,5 +585,5 @@ function (layer::LinearLayer)(layer_above::Union{LinearLayer, InputLayer}, curre
         end
         layer.grad_bias .*= inverse_n_samples  # in-place scaling
     end
-    return     
+    return
 end
